@@ -535,46 +535,21 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     // Перед запуском React — сначала тянем server imports, потом вызываем оригинальный loader
     function wrapLoadCatalog() {
       if (!window.__EV_LOAD_CATALOG || window.__EV_LOAD_CATALOG.__wrapped) return;
-      // Для совместимости (fallback если BOOT_REACT обёртка не сработала)
-      var original = window.__EV_LOAD_CATALOG;
-      window.__EV_LOAD_CATALOG = async function() {
-        await original();
-        try {
-          if (window.__EV_D1_SYNC.__server_merged) return;
-          window.__EV_D1_SYNC.__server_merged = true;
-          var serverRows = await window.__EV_D1_SYNC.fetchImports();
-          if (serverRows.length && Array.isArray(window.__EV_CATALOG_ROWS)) {
-            var prefixed = serverRows.map(function(r, i) {
-              return Object.assign({}, r, {
-                id: 'srv-' + (r._import_id || i),
-                is_server_import: true
-              });
-            });
-            Array.prototype.unshift.apply(window.__EV_CATALOG_ROWS, prefixed);
-            log('Серверных строк добавлено (fallback post-React):', serverRows.length);
-          }
-        } catch(e) { warn('server imports merge fail:', e.message); }
-      };
+      // Помечаем оригинал как обёрнутый (чтобы не дёргать fallback)
       window.__EV_LOAD_CATALOG.__wrapped = true;
 
-      // === КРИТИЧНЫЙ ФИКС: обёртка BOOT_REACT ===
-      // React монтируется внутри __EV_BOOT_REACT(). Перехватываем его чтобы
-      // добавить серверные строки ДО mount — только так React их увидит.
+      // КРИТИЧНО: оборачиваем BOOT_REACT чтобы серверные строки попали в массив
+      // ДО инициализации React (React захватывает ссылку в замыкание при init).
       function tryWrapBoot() {
         if (!window.__EV_BOOT_REACT || window.__EV_BOOT_REACT.__wrapped) return false;
         var origBoot = window.__EV_BOOT_REACT;
         window.__EV_BOOT_REACT = function() {
-          // Синхронно невозможно: fetchImports async. Но если __server_merged уже true - строки в массиве,
-          // просто запускаем React. Иначе - старт БЕЗ серверных строк + дозалив с реактивным обновлением.
           if (window.__EV_D1_SYNC.__server_merged) {
-            log('BOOT_REACT: серверные строки уже в массиве');
             return origBoot.apply(this, arguments);
           }
-          // Запускаем подгрузку асинхронно, но не ждём - React стартует сразу
-          var bootArgs = arguments;
-          var self = this;
+          window.__EV_D1_SYNC.__server_merged = true;  // флаг СРАЗУ, до await
+          var bootArgs = arguments, self = this;
           window.__EV_D1_SYNC.fetchImports().then(function(serverRows) {
-            window.__EV_D1_SYNC.__server_merged = true;
             if (serverRows.length && Array.isArray(window.__EV_CATALOG_ROWS)) {
               var prefixed = serverRows.map(function(r, i) {
                 return Object.assign({}, r, {
@@ -583,20 +558,18 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
                 });
               });
               Array.prototype.unshift.apply(window.__EV_CATALOG_ROWS, prefixed);
-              log('Серверных строк добавлено до BOOT:', serverRows.length);
+              log('Серверных строк добавлено:', serverRows.length);
             }
-            // Теперь запускаем React с обновлённым массивом
             origBoot.apply(self, bootArgs);
           }).catch(function(e) {
-            warn('Fetch серверных импортов упал:', e.message);
-            origBoot.apply(self, bootArgs); // Всё равно стартуем
+            warn('Fetch fail:', e.message);
+            origBoot.apply(self, bootArgs);
           });
         };
         window.__EV_BOOT_REACT.__wrapped = true;
         log('__EV_BOOT_REACT обёрнут');
         return true;
       }
-      // Polling пока __EV_BOOT_REACT не появится (определяется в основном bundle)
       var attempts = 0;
       var pollBoot = setInterval(function() {
         attempts++;
@@ -606,7 +579,6 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
       log('__EV_LOAD_CATALOG обёрнут');
     }
 
-    // Вызываем сразу, если функции уже есть, иначе ждём
     function tryWrap() {
       wrapParseFile();
       wrapLoadCatalog();
