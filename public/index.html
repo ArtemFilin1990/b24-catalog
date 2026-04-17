@@ -361,7 +361,7 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     try {
       setStatus('Загрузка каталога...', 10);
       await sleep(30);
-      var catalogResp = await fetch('https://pub-988dc02c21234515ae4c8de38c2cbe3a.r2.dev/catalog.gz', { cache: 'force-cache' });
+      var catalogResp = await fetch('/catalog.gz', { cache: 'force-cache' });
       if (!catalogResp.ok) throw new Error('Ошибка загрузки каталога: ' + catalogResp.status);
 
       setStatus('Распаковка...', 40);
