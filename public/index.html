@@ -590,6 +590,87 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     setTimeout(tryWrap, 500);
 
     log('D1-Sync инициализирован, API:', API_BASE);
+
+    // ===== СЧЁТЧИК ОБЩЕГО РАЗМЕРА БАЗЫ =====
+    // Показывает "Всего в базе: 86 191" в шапке каталога
+    function injectCatalogCounter() {
+      if (document.getElementById('ev-catalog-counter')) return; // уже есть
+      if (!window.__EV_CATALOG_ROWS || !window.__EV_CATALOG_ROWS.length) return;
+
+      // Ищу место в шапке - правый верх после пользователя
+      var headerRight = document.querySelector('header, [class*="bg-[#2e5f99]"]');
+      if (!headerRight) {
+        // Fallback - ищу кнопку Иванов А.А.
+        var allButtons = document.querySelectorAll('button, span');
+        var userBtn = null;
+        for (var i = 0; i < allButtons.length; i++) {
+          if (allButtons[i].textContent && /[А-Я]\.[А-Я]\./.test(allButtons[i].textContent)) {
+            userBtn = allButtons[i]; break;
+          }
+        }
+        headerRight = userBtn ? userBtn.closest('div') : document.body;
+      }
+
+      var total = window.__EV_CATALOG_ROWS.length;
+      var serverCount = window.__EV_CATALOG_ROWS.filter(function(r){return r.is_server_import;}).length;
+      var baseCount = total - serverCount;
+
+      var counter = document.createElement('div');
+      counter.id = 'ev-catalog-counter';
+      counter.style.cssText = [
+        'display:inline-flex',
+        'align-items:center',
+        'gap:6px',
+        'padding:4px 10px',
+        'margin:0 8px',
+        'background:rgba(255,255,255,0.12)',
+        'border:1px solid rgba(255,255,255,0.2)',
+        'border-radius:6px',
+        'color:#fff',
+        'font-size:11px',
+        'font-weight:500',
+        'white-space:nowrap',
+        'cursor:default'
+      ].join(';');
+
+      var formatted = total.toLocaleString('ru-RU');
+      var tooltip = 'Базовый каталог: ' + baseCount.toLocaleString('ru-RU');
+      if (serverCount > 0) tooltip += ' + Импортов: ' + serverCount.toLocaleString('ru-RU');
+
+      counter.innerHTML = '<span style="opacity:.7">База:</span> <b>' + formatted + '</b>';
+      counter.title = tooltip;
+
+      // Вставляю в шапку
+      if (headerRight.tagName === 'HEADER' || headerRight.className && headerRight.className.indexOf('bg-[#') >= 0) {
+        // Шапка найдена - вставляю в начало правой части
+        var right = headerRight.querySelector('[class*="items-end"], [class*="ml-auto"], [class*="justify-end"]');
+        (right || headerRight).appendChild(counter);
+      } else {
+        headerRight.parentNode.insertBefore(counter, headerRight);
+      }
+      log('Счётчик базы добавлен:', formatted, 'позиций');
+    }
+
+    // Вызываем после монтирования React (с retry)
+    function tryInjectCounter() {
+      try { injectCatalogCounter(); } catch(e) { warn('counter inject fail:', e.message); }
+    }
+    // Каталог монтируется ~2-3 сек, пробуем несколько раз
+    setTimeout(tryInjectCounter, 1500);
+    setTimeout(tryInjectCounter, 3000);
+    setTimeout(tryInjectCounter, 5000);
+    setTimeout(tryInjectCounter, 10000);
+
+    // Плюс слежение за изменениями: если React перерисует шапку, вставим заново
+    var observer = new MutationObserver(function() {
+      if (!document.getElementById('ev-catalog-counter') && window.__EV_CATALOG_ROWS && window.__EV_CATALOG_ROWS.length > 100) {
+        tryInjectCounter();
+      }
+    });
+    setTimeout(function() {
+      if (document.body) observer.observe(document.body, { childList: true, subtree: true });
+    }, 2000);
+
   })();
   </script>
 
