@@ -562,15 +562,17 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
           window.__EV_D1_SYNC.__server_merged = true;
           var serverRows = await window.__EV_D1_SYNC.fetchImports();
           if (serverRows.length && Array.isArray(window.__EV_CATALOG_ROWS)) {
-            // Добавляем в НАЧАЛО массива чтобы серверные строки были сверху
-            // с префиксом id "srv-"
             var prefixed = serverRows.map(function(r, i) {
               return Object.assign({}, r, {
                 id: 'srv-' + (r._import_id || i),
                 is_server_import: true
               });
             });
-            window.__EV_CATALOG_ROWS = prefixed.concat(window.__EV_CATALOG_ROWS);
+            // КРИТИЧНО: мутируем исходный массив, НЕ пересоздаём.
+            // React захватывает ссылку на __EV_CATALOG_ROWS в замыкании при init,
+            // поэтому window.__EV_CATALOG_ROWS = newArray React НЕ увидит.
+            // unshift добавляет в начало того же массива — ссылка сохраняется.
+            Array.prototype.unshift.apply(window.__EV_CATALOG_ROWS, prefixed);
             log('Серверных строк добавлено:', serverRows.length, '| Всего:', window.__EV_CATALOG_ROWS.length);
           }
         } catch(e) { warn('server imports merge fail:', e.message); }
@@ -661,35 +663,15 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     setTimeout(tryInjectCounter, 5000);
     setTimeout(tryInjectCounter, 10000);
 
-    // Throttled observer - проверяет наличие счётчика не чаще чем раз в 2 секунды
-    var lastCheck = 0;
+    // Плюс слежение за изменениями: если React перерисует шапку, вставим заново
     var observer = new MutationObserver(function() {
-      var now = Date.now();
-      if (now - lastCheck < 2000) return; // throttle
-      if (document.getElementById('ev-catalog-counter')) return; // уже есть
-      if (!window.__EV_CATALOG_ROWS || window.__EV_CATALOG_ROWS.length < 100) return;
-      lastCheck = now;
-      tryInjectCounter();
+      if (!document.getElementById('ev-catalog-counter') && window.__EV_CATALOG_ROWS && window.__EV_CATALOG_ROWS.length > 100) {
+        tryInjectCounter();
+      }
     });
     setTimeout(function() {
-      // Наблюдаем ТОЛЬКО за шапкой (header), не за всем body
-      // иначе observer срабатывает на каждое изменение таблицы при импорте
-      var header = document.querySelector('header, [class*="bg-[#2e5f99]"]') || document.body;
-      if (header) observer.observe(header, { childList: true, subtree: true });
+      if (document.body) observer.observe(document.body, { childList: true, subtree: true });
     }, 2000);
-
-    // Обновление счётчика после импорта: следим за window.__EV_CATALOG_ROWS
-    var lastCount = 0;
-    setInterval(function() {
-      var counter = document.getElementById('ev-catalog-counter');
-      if (!counter || !window.__EV_CATALOG_ROWS) return;
-      var cnt = window.__EV_CATALOG_ROWS.length;
-      if (cnt !== lastCount) {
-        lastCount = cnt;
-        var formatted = cnt.toLocaleString('ru-RU');
-        counter.innerHTML = '<span style="opacity:.7">База:</span> <b>' + formatted + '</b>';
-      }
-    }, 3000);
 
   })();
   </script>
