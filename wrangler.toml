@@ -11,5 +11,9 @@ binding = "DB"
 database_name = "baza"
 database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
 
+[[r2_buckets]]
+binding = "CATALOG"
+bucket_name = "vedro"
+
 [observability]
 enabled = true
