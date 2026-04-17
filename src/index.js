@@ -9,6 +9,7 @@ const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Cache-Control': 'no-store, no-cache, must-revalidate',
 };
 
 const JSON_HEADERS = {
@@ -37,13 +38,16 @@ async function readJSON(request) {
 // добавляет frame-ancestors для Bitrix24
 async function wrapAssetResponse(assetResp) {
   const newHeaders = new Headers(assetResp.headers);
-  // Принудительно удаляем X-Frame-Options - он конфликтует с CSP frame-ancestors
+  // Принудительно удаляем X-Frame-Options
   newHeaders.delete('X-Frame-Options');
   newHeaders.delete('x-frame-options');
   // Удаляем старый CSP если есть
   newHeaders.delete('Content-Security-Policy');
   newHeaders.delete('content-security-policy');
-  // Ставим наши
+  // Удаляем ETag чтобы не было 304
+  newHeaders.delete('ETag');
+  newHeaders.delete('etag');
+  // Ставим наши CSP + no-cache
   for (const [k, v] of Object.entries(FRAME_HEADERS)) {
     newHeaders.set(k, v);
   }
