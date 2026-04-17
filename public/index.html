@@ -548,6 +548,8 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
         await original();
         // 2. Параллельно подгружаем серверные импорты
         try {
+          if (window.__EV_D1_SYNC.__server_merged) return;
+          window.__EV_D1_SYNC.__server_merged = true;
           var serverRows = await window.__EV_D1_SYNC.fetchImports();
           if (serverRows.length && Array.isArray(window.__EV_CATALOG_ROWS)) {
             // Добавляем в НАЧАЛО массива чтобы серверные строки были сверху
