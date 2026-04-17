@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Upload catalog.gz to R2
-        run: npx wrangler r2 object put vedro/catalog.gz --file=data/catalog.gz --content-type=application/gzip
+        run: npx wrangler r2 object put vedro/catalog.gz --file=data/catalog.gz --content-type=application/gzip --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 84cbacc4816c29c294101ec57a0bea5d
