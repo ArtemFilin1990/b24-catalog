@@ -274,6 +274,28 @@ export default {
     }
 
     // === R2 каталог — отдаём gzip из бакета CATALOG ===
+        // Admin endpoint: upload catalog.gz to R2 (token-protected)
+    if (path === "/api/admin/upload-catalog" && method === "POST") {
+      const token = request.headers.get("x-upload-token");
+      if (token !== "045IUUAOXJy3aN8XrcHSVRQixAOZekA766trlu7OvIU") {
+        return jsonErr("Unauthorized", 401);
+      }
+      try {
+        const body = await request.arrayBuffer();
+        if (!body || body.byteLength === 0) return jsonErr("empty body", 400);
+        await env.CATALOG.put("catalog.gz", body, {
+          httpMetadata: { contentType: "application/gzip" },
+          customMetadata: {
+            uploaded_at: new Date().toISOString(),
+            size: String(body.byteLength)
+          }
+        });
+        return jsonOk({ uploaded: true, size: body.byteLength });
+      } catch (e) {
+        return jsonErr("Upload failed: " + e.message, 500);
+      }
+    }
+
     if (path === '/catalog.gz') {
       try {
         const obj = await env.CATALOG.get('catalog.gz');
