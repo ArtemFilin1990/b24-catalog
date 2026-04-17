@@ -15,5 +15,9 @@ database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
 binding = "CATALOG"
 bucket_name = "vedro"
 
+# Cron: бэкап D1 → R2 каждый день в 03:00 UTC
+[triggers]
+crons = ["0 3 * * *"]
+
 [observability]
 enabled = true
