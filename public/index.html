@@ -661,15 +661,35 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     setTimeout(tryInjectCounter, 5000);
     setTimeout(tryInjectCounter, 10000);
 
-    // Плюс слежение за изменениями: если React перерисует шапку, вставим заново
+    // Throttled observer - проверяет наличие счётчика не чаще чем раз в 2 секунды
+    var lastCheck = 0;
     var observer = new MutationObserver(function() {
-      if (!document.getElementById('ev-catalog-counter') && window.__EV_CATALOG_ROWS && window.__EV_CATALOG_ROWS.length > 100) {
-        tryInjectCounter();
-      }
+      var now = Date.now();
+      if (now - lastCheck < 2000) return; // throttle
+      if (document.getElementById('ev-catalog-counter')) return; // уже есть
+      if (!window.__EV_CATALOG_ROWS || window.__EV_CATALOG_ROWS.length < 100) return;
+      lastCheck = now;
+      tryInjectCounter();
     });
     setTimeout(function() {
-      if (document.body) observer.observe(document.body, { childList: true, subtree: true });
+      // Наблюдаем ТОЛЬКО за шапкой (header), не за всем body
+      // иначе observer срабатывает на каждое изменение таблицы при импорте
+      var header = document.querySelector('header, [class*="bg-[#2e5f99]"]') || document.body;
+      if (header) observer.observe(header, { childList: true, subtree: true });
     }, 2000);
+
+    // Обновление счётчика после импорта: следим за window.__EV_CATALOG_ROWS
+    var lastCount = 0;
+    setInterval(function() {
+      var counter = document.getElementById('ev-catalog-counter');
+      if (!counter || !window.__EV_CATALOG_ROWS) return;
+      var cnt = window.__EV_CATALOG_ROWS.length;
+      if (cnt !== lastCount) {
+        lastCount = cnt;
+        var formatted = cnt.toLocaleString('ru-RU');
+        counter.innerHTML = '<span style="opacity:.7">База:</span> <b>' + formatted + '</b>';
+      }
+    }, 3000);
 
   })();
   </script>
