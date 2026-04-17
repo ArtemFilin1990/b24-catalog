@@ -77,14 +77,18 @@ catalog.gz row format (28 elements):
   [27] status       - 0=unknown, 1=in_stock, 2=on_order
 """
 
+import math
+import os
 import sys
 import json
 import gzip
 from datetime import date
+from pathlib import Path
 import openpyxl
 
-XLSX_PATH = '/home/runner/work/b24-catalog/b24-catalog/data/ewerest_bearing_catalog_filled_all.xlsx'
-OUT_PATH = '/home/runner/work/b24-catalog/b24-catalog/data/catalog.gz'
+_DATA_DIR = Path(__file__).parent
+XLSX_PATH = str(_DATA_DIR / 'ewerest_bearing_catalog_filled_all.xlsx')
+OUT_PATH = str(_DATA_DIR / 'catalog.gz')
 
 
 def get_or_add(lst, value):
@@ -116,7 +120,7 @@ def safe_float(val):
         return 0.0
     try:
         f = float(val)
-        return f if f == f else 0.0  # NaN check
+        return f if not math.isnan(f) else 0.0
     except (TypeError, ValueError):
         return 0.0
 
@@ -258,7 +262,6 @@ def main():
     with gzip.open(OUT_PATH, 'wb', compresslevel=9) as f:
         f.write(json_bytes)
 
-    import os
     gz_size = os.path.getsize(OUT_PATH)
     print(f'Written to {OUT_PATH}: {gz_size:,} bytes (compressed)')
     print('Done!')
