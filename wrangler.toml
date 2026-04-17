@@ -5,3 +5,11 @@ compatibility_date = "2026-04-17"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "baza"
+database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
+
+[observability]
+enabled = true
