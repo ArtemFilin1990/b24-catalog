@@ -435,5 +435,151 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
   </head>
   <body>
     <div id="root"></div>
+  
+  <!-- ВСТАВКА: интеграция с /api/imports для сохранения импорта в D1 -->
+  <script id="ev-d1-sync">
+  (function(){
+    "use strict";
+    if (window.__EV_D1_SYNC) return;
+    window.__EV_D1_SYNC = { version: 1, started_at: Date.now() };
+
+    var API_BASE = (function(){
+      // Same-origin API base. Если HTML открыт с file:// - используем заглушку.
+      try {
+        if (location.protocol === 'file:' || location.protocol === 'data:') return null;
+        return location.origin;
+      } catch(e) { return null; }
+    })();
+
+    function log() { try { console.log.apply(console, ['[D1-Sync]'].concat([].slice.call(arguments))); } catch(e){} }
+    function warn() { try { console.warn.apply(console, ['[D1-Sync]'].concat([].slice.call(arguments))); } catch(e){} }
+
+    // Читаем серверные импорты и добавляем в каталог.
+    // Вызываем ДО __EV_LOAD_CATALOG чтобы когда React смонтируется, данные уже были.
+    window.__EV_D1_SYNC.fetchImports = async function() {
+      if (!API_BASE) { log('API недоступен (local file)'); return []; }
+      try {
+        var r = await fetch(API_BASE + '/api/imports', { cache: 'no-store' });
+        if (!r.ok) { warn('GET /api/imports HTTP', r.status); return []; }
+        var j = await r.json();
+        if (!j || !j.ok) { warn('GET /api/imports not ok:', j); return []; }
+        log('Подгружено с сервера:', j.count, 'записей');
+        return j.rows || [];
+      } catch(e) { warn('fetchImports fail', e.message); return []; }
+    };
+
+    // Отправляет распарсенные строки на сервер и возвращает session_id
+    window.__EV_D1_SYNC.pushImport = async function(rows, meta) {
+      if (!API_BASE) { warn('pushImport: API недоступен'); return null; }
+      if (!rows || !rows.length) return null;
+      try {
+        meta = meta || {};
+        var payload = {
+          rows: rows,
+          source: meta.source || 'catalog-import',
+          filename: meta.filename || '',
+          format: meta.format || '',
+          uploaded_by: meta.uploaded_by || (localStorage.getItem('ev_user') || 'anonymous')
+        };
+        var r = await fetch(API_BASE + '/api/imports', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        var j = await r.json();
+        if (!j || !j.ok) { warn('POST /api/imports failed:', j); return null; }
+        log('Сохранено на сервер, session:', j.session_id, 'строк:', j.inserted);
+        return j.session_id;
+      } catch(e) { warn('pushImport fail', e.message); return null; }
+    };
+
+    // Получить список сессий
+    window.__EV_D1_SYNC.listSessions = async function() {
+      if (!API_BASE) return [];
+      try {
+        var r = await fetch(API_BASE + '/api/sessions', { cache: 'no-store' });
+        var j = await r.json();
+        return (j && j.ok) ? (j.sessions || []) : [];
+      } catch(e) { return []; }
+    };
+
+    // Удалить сессию
+    window.__EV_D1_SYNC.deleteSession = async function(sessionId) {
+      if (!API_BASE || !sessionId) return false;
+      try {
+        var r = await fetch(API_BASE + '/api/imports/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+        var j = await r.json();
+        return !!(j && j.ok);
+      } catch(e) { return false; }
+    };
+
+    // ===== Оборачиваем __EV_PARSE_FILE =====
+    // Когда менеджер импортирует XLSX/CSV/DOCX - после локального парсинга
+    // строки дополнительно отправляются на сервер
+    function wrapParseFile() {
+      if (!window.__EV_PARSE_FILE || window.__EV_PARSE_FILE.__wrapped) return;
+      var original = window.__EV_PARSE_FILE;
+      window.__EV_PARSE_FILE = async function(file) {
+        var rows = await original(file);
+        if (rows && rows.length) {
+          var ext = (file.name || '').toLowerCase().split('.').pop();
+          // НЕ блокируем UI: отправка асинхронная, не ждём
+          window.__EV_D1_SYNC.pushImport(rows, {
+            source: 'manual-upload',
+            filename: file.name || '',
+            format: ext
+          }).then(function(sid) {
+            if (sid) log('Импорт "' + file.name + '" сохранён на сервер');
+          });
+        }
+        return rows;
+      };
+      window.__EV_PARSE_FILE.__wrapped = true;
+      log('__EV_PARSE_FILE обёрнут');
+    }
+
+    // ===== Оборачиваем __EV_LOAD_CATALOG =====
+    // Перед запуском React — сначала тянем server imports, потом вызываем оригинальный loader
+    function wrapLoadCatalog() {
+      if (!window.__EV_LOAD_CATALOG || window.__EV_LOAD_CATALOG.__wrapped) return;
+      var original = window.__EV_LOAD_CATALOG;
+      window.__EV_LOAD_CATALOG = async function() {
+        // 1. Запускаем оригинальный loader (распаковывает gzip base64 → window.__EV_CATALOG_ROWS)
+        await original();
+        // 2. Параллельно подгружаем серверные импорты
+        try {
+          var serverRows = await window.__EV_D1_SYNC.fetchImports();
+          if (serverRows.length && Array.isArray(window.__EV_CATALOG_ROWS)) {
+            // Добавляем в НАЧАЛО массива чтобы серверные строки были сверху
+            // с префиксом id "srv-"
+            var prefixed = serverRows.map(function(r, i) {
+              return Object.assign({}, r, {
+                id: 'srv-' + (r._import_id || i),
+                is_server_import: true
+              });
+            });
+            window.__EV_CATALOG_ROWS = prefixed.concat(window.__EV_CATALOG_ROWS);
+            log('Серверных строк добавлено:', serverRows.length, '| Всего:', window.__EV_CATALOG_ROWS.length);
+          }
+        } catch(e) { warn('server imports merge fail:', e.message); }
+      };
+      window.__EV_LOAD_CATALOG.__wrapped = true;
+      log('__EV_LOAD_CATALOG обёрнут');
+    }
+
+    // Вызываем сразу, если функции уже есть, иначе ждём
+    function tryWrap() {
+      wrapParseFile();
+      wrapLoadCatalog();
+    }
+    tryWrap();
+    // И повторно с задержкой - на случай если функции объявятся позже
+    setTimeout(tryWrap, 100);
+    setTimeout(tryWrap, 500);
+
+    log('D1-Sync инициализирован, API:', API_BASE);
+  })();
+  </script>
+
   </body>
 </html>
