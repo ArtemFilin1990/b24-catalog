@@ -219,6 +219,23 @@ export default {
       } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
+    // === R2 каталог — отдаём gzip из бакета CATALOG ===
+    if (path === '/catalog.gz') {
+      try {
+        const obj = await env.CATALOG.get('catalog.gz');
+        if (!obj) return jsonErr('catalog.gz not found in R2', 404);
+        return new Response(obj.body, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/gzip',
+            'Cache-Control': 'public, max-age=86400, stale-while-revalidate=3600',
+            'Access-Control-Allow-Origin': '*',
+            ...FRAME_HEADERS,
+          }
+        });
+      } catch(e) { return jsonErr('R2 read failed: ' + e.message, 500); }
+    }
+
     // === ASSETS — с обёрткой CSP для iframe Bitrix24 ===
     if (path === '/install' || path === '/install.html') {
       const r = await env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
