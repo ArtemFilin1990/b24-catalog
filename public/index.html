@@ -521,21 +521,31 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
       var original = window.__EV_PARSE_FILE;
       window.__EV_PARSE_FILE = async function(file) {
         var rows = await original(file);
-        if (rows && rows.length) {
-          var ext = (file.name || '').toLowerCase().split('.').pop();
-          // НЕ блокируем UI: отправка асинхронная, не ждём
+
+        // ЗАЩИТА от автосохранения полного каталога:
+        // отправляем на сервер ТОЛЬКО если это реальный пользовательский импорт
+        var isRealFile = file && typeof file === 'object' && file instanceof File;
+        var fileName = (file && file.name) ? String(file.name).toLowerCase() : '';
+        var ext = fileName.split('.').pop();
+        var allowedExt = ['xlsx', 'xls', 'csv', 'tsv', 'txt', 'docx', 'json'];
+        var isValidExt = allowedExt.indexOf(ext) >= 0;
+        var isReasonableSize = rows && rows.length > 0 && rows.length <= 5000;
+
+        if (isRealFile && isValidExt && isReasonableSize) {
           window.__EV_D1_SYNC.pushImport(rows, {
             source: 'manual-upload',
             filename: file.name || '',
             format: ext
           }).then(function(sid) {
-            if (sid) log('Импорт "' + file.name + '" сохранён на сервер');
+            if (sid) log('Импорт "' + file.name + '" сохранён на сервер (' + rows.length + ' строк)');
           });
+        } else if (rows && rows.length > 5000) {
+          warn('Пропуск автосохранения: слишком много строк (' + rows.length + ')');
         }
         return rows;
       };
       window.__EV_PARSE_FILE.__wrapped = true;
-      log('__EV_PARSE_FILE обёрнут');
+      log('__EV_PARSE_FILE обёрнут (safe mode)');
     }
 
     // ===== Оборачиваем __EV_LOAD_CATALOG =====
