@@ -1,39 +1,57 @@
 // src/index.js
-// b24-catalog Worker: отдаёт каталог, хранит импорты и заявки в D1 базе.
+// b24-catalog Worker: отдаёт каталог, хранит импорты и заявки в D1.
+// ФИКС: все ответы ассетов оборачиваются CSP/X-Frame для встраивания в Bitrix24.
 
 const BITRIX_WEBHOOK = 'https://ewerest.bitrix24.ru/rest/1/7p899kjck8sh8b3x';
 
-const COMMON_HEADERS = {
-  'Content-Security-Policy': "frame-ancestors 'self' https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.eu",
-  'X-Frame-Options': 'ALLOWALL',
+const FRAME_HEADERS = {
+  'Content-Security-Policy': "frame-ancestors 'self' https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.eu https://*.bitrix24.de",
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
 const JSON_HEADERS = {
-  ...COMMON_HEADERS,
+  ...FRAME_HEADERS,
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-store',
 };
 
 function jsonOk(data, extra = {}) {
   return new Response(JSON.stringify({ ok: true, ...data }), {
-    status: 200,
-    headers: { ...JSON_HEADERS, ...extra }
+    status: 200, headers: { ...JSON_HEADERS, ...extra }
   });
 }
 
 function jsonErr(message, status = 400) {
   return new Response(JSON.stringify({ ok: false, error: message }), {
-    status,
-    headers: JSON_HEADERS
+    status, headers: JSON_HEADERS
   });
 }
 
 async function readJSON(request) {
-  try { return await request.json(); }
-  catch (e) { return null; }
+  try { return await request.json(); } catch (e) { return null; }
+}
+
+// Оборачивает ответ от ASSETS: удаляет X-Frame-Options (если стоит DENY),
+// добавляет frame-ancestors для Bitrix24
+async function wrapAssetResponse(assetResp) {
+  const newHeaders = new Headers(assetResp.headers);
+  // Принудительно удаляем X-Frame-Options - он конфликтует с CSP frame-ancestors
+  newHeaders.delete('X-Frame-Options');
+  newHeaders.delete('x-frame-options');
+  // Удаляем старый CSP если есть
+  newHeaders.delete('Content-Security-Policy');
+  newHeaders.delete('content-security-policy');
+  // Ставим наши
+  for (const [k, v] of Object.entries(FRAME_HEADERS)) {
+    newHeaders.set(k, v);
+  }
+  return new Response(assetResp.body, {
+    status: assetResp.status,
+    statusText: assetResp.statusText,
+    headers: newHeaders
+  });
 }
 
 export default {
@@ -43,11 +61,10 @@ export default {
     const method = request.method;
 
     if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: COMMON_HEADERS });
+      return new Response(null, { status: 204, headers: FRAME_HEADERS });
     }
 
     // === API ===
-
     if (path === '/api/ping') {
       return jsonOk({ app: 'b24-catalog', time: new Date().toISOString() });
     }
@@ -64,9 +81,7 @@ export default {
           } catch (e) { return null; }
         }).filter(Boolean);
         return jsonOk({ rows, count: rows.length });
-      } catch (e) {
-        return jsonErr('DB read failed: ' + e.message, 500);
-      }
+      } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     if (path === '/api/imports' && method === 'POST') {
@@ -79,12 +94,10 @@ export default {
       const format = String(body.format || '').slice(0, 16);
       const uploadedBy = String(body.uploaded_by || 'anonymous').slice(0, 128);
       const sessionId = String(body.session_id || crypto.randomUUID()).slice(0, 64);
-
       try {
         await env.DB.prepare(
           'INSERT OR REPLACE INTO import_sessions (id, uploaded_by, filename, format, rows_count, status) VALUES (?, ?, ?, ?, ?, ?)'
         ).bind(sessionId, uploadedBy, filename, format, body.rows.length, 'active').run();
-
         const stmts = body.rows.map(row => {
           const dataJson = JSON.stringify(row);
           return env.DB.prepare(
@@ -103,9 +116,7 @@ export default {
         });
         const results = await env.DB.batch(stmts);
         return jsonOk({ session_id: sessionId, inserted: results.length, source: source });
-      } catch (e) {
-        return jsonErr('DB write failed: ' + e.message, 500);
-      }
+      } catch (e) { return jsonErr('DB write failed: ' + e.message, 500); }
     }
 
     if (path.startsWith('/api/imports/') && method === 'DELETE') {
@@ -115,9 +126,7 @@ export default {
           'UPDATE imported_rows SET deleted = 1 WHERE session_id = ? AND deleted = 0'
         ).bind(sessionId).run();
         return jsonOk({ deleted: rs.meta?.changes || 0 });
-      } catch (e) {
-        return jsonErr('DB delete failed: ' + e.message, 500);
-      }
+      } catch (e) { return jsonErr('DB delete failed: ' + e.message, 500); }
     }
 
     if (path === '/api/sessions' && method === 'GET') {
@@ -126,34 +135,25 @@ export default {
           'SELECT id, uploaded_at, uploaded_by, filename, format, rows_count, status FROM import_sessions ORDER BY uploaded_at DESC LIMIT 200'
         ).all();
         return jsonOk({ sessions: rs.results || [] });
-      } catch (e) {
-        return jsonErr('DB read failed: ' + e.message, 500);
-      }
+      } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     if (path === '/api/orders' && method === 'POST') {
       const body = await readJSON(request);
-      if (!body || !body.contact) {
-        return jsonErr('contact{} required', 400);
-      }
+      if (!body || !body.contact) return jsonErr('contact{} required', 400);
       const contact = body.contact;
-      if (!contact.phone && !contact.email) {
-        return jsonErr('contact.phone или contact.email обязательны', 400);
-      }
+      if (!contact.phone && !contact.email) return jsonErr('contact.phone или contact.email обязательны', 400);
       const items = Array.isArray(body.items) ? body.items : [];
       const total = Number(body.total || 0);
       const orderDate = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
-
       const dealTitle = `Заявка с каталога — ${contact.company || contact.name || 'клиент'} — ${orderDate}`;
       const comments = [
-        `Заявка с каталога ewerest.ru от ${orderDate}`,
-        '',
+        `Заявка с каталога от ${orderDate}`, '',
         `Компания: ${contact.company || '[[TBD]]'}`,
         `ИНН: ${contact.inn || '[[TBD]]'}`,
         `Контакт: ${contact.name || '[[TBD]]'}`,
         `Телефон: ${contact.phone || '[[TBD]]'}`,
-        `Email: ${contact.email || '[[TBD]]'}`,
-        '',
+        `Email: ${contact.email || '[[TBD]]'}`, '',
         contact.comment ? `Комментарий:\n${contact.comment}\n` : '',
         `Состав (${items.length} поз., ${total.toLocaleString('ru-RU')} ₽):`,
         ...items.map((it, i) =>
@@ -161,10 +161,7 @@ export default {
           (it.price > 0 ? ` × ${it.price} ₽` : ' (по запросу)')
         )
       ].filter(Boolean).join('\n');
-
-      let dealId = null;
-      let bitrixError = null;
-
+      let dealId = null, bitrixError = null;
       try {
         const dealRes = await fetch(`${BITRIX_WEBHOOK}/crm.deal.add.json`, {
           method: 'POST',
@@ -179,9 +176,8 @@ export default {
           })
         });
         const dealData = await dealRes.json();
-        if (dealData.error) {
-          bitrixError = dealData.error_description || dealData.error;
-        } else {
+        if (dealData.error) bitrixError = dealData.error_description || dealData.error;
+        else {
           dealId = dealData.result;
           if (items.length > 0) {
             const productRows = items.map(it => ({
@@ -192,16 +188,12 @@ export default {
               MEASURE_CODE: 796, MEASURE_NAME: 'шт'
             }));
             await fetch(`${BITRIX_WEBHOOK}/crm.deal.productrows.set.json`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ id: dealId, rows: productRows })
             });
           }
         }
-      } catch (e) {
-        bitrixError = e.message;
-      }
-
+      } catch (e) { bitrixError = e.message; }
       try {
         const rs = await env.DB.prepare(
           `INSERT INTO orders (bitrix_deal_id, company_name, inn, contact_name, phone, email, comment, total_rub, items_json, status)
@@ -212,48 +204,36 @@ export default {
           contact.comment || null, total, JSON.stringify(items),
           bitrixError ? 'bitrix_failed' : 'sent'
         ).run();
-        return jsonOk({
-          order_id: rs.meta?.last_row_id, bitrix_deal_id: dealId, bitrix_error: bitrixError
-        });
-      } catch (e) {
-        return jsonErr('DB write failed: ' + e.message, 500);
-      }
+        return jsonOk({ order_id: rs.meta?.last_row_id, bitrix_deal_id: dealId, bitrix_error: bitrixError });
+      } catch (e) { return jsonErr('DB write failed: ' + e.message, 500); }
     }
 
     if (path === '/api/orders' && method === 'GET') {
       try {
-        const rs = await env.DB.prepare(
-          'SELECT * FROM orders ORDER BY created_at DESC LIMIT 100'
-        ).all();
+        const rs = await env.DB.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100').all();
         return jsonOk({ orders: rs.results || [] });
-      } catch (e) {
-        return jsonErr('DB read failed: ' + e.message, 500);
-      }
+      } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
-    // === STATIC ASSETS ===
-
+    // === ASSETS — с обёрткой CSP для iframe Bitrix24 ===
     if (path === '/install' || path === '/install.html') {
-      return env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
+      const r = await env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
+      return wrapAssetResponse(r);
+    }
+
+    // Bitrix24 приложение делает POST на / при установке - отдаём install.html
+    if (method === 'POST' && (path === '/' || path === '/app')) {
+      const r = await env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
+      return wrapAssetResponse(r);
     }
 
     if (path === '/' || path === '/app') {
-      return env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
+      const r = await env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
+      return wrapAssetResponse(r);
     }
 
-    if (method === 'POST' && (path === '/' || path === '/app')) {
-      return env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
-    }
-
-    const assetResponse = await env.ASSETS.fetch(request);
-    const newHeaders = new Headers(assetResponse.headers);
-    for (const [k, v] of Object.entries(COMMON_HEADERS)) {
-      newHeaders.set(k, v);
-    }
-    return new Response(assetResponse.body, {
-      status: assetResponse.status,
-      statusText: assetResponse.statusText,
-      headers: newHeaders
-    });
+    // Статические ассеты — тоже оборачиваем (для вложенных CSS/JS)
+    const assetResp = await env.ASSETS.fetch(request);
+    return wrapAssetResponse(assetResp);
   }
 };
