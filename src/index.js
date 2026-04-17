@@ -58,7 +58,56 @@ async function wrapAssetResponse(assetResp) {
   });
 }
 
+
+// === Бэкап D1 → R2 ===
+async function backupD1toR2(env) {
+  try {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+    // Забираем все таблицы
+    const tables = ['imported_rows', 'import_sessions', 'orders'];
+    const backup = { created_at: new Date().toISOString(), tables: {} };
+
+    for (const table of tables) {
+      try {
+        const rs = await env.DB.prepare(`SELECT * FROM ${table} LIMIT 100000`).all();
+        backup.tables[table] = rs.results || [];
+      } catch(e) {
+        backup.tables[table] = { error: e.message };
+      }
+    }
+
+    const json = JSON.stringify(backup, null, 0);
+    const key = `backups/d1-backup-${ts}.json`;
+
+    // Сохраняем в R2
+    await env.CATALOG.put(key, json, {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: { 
+        rows: String(Object.values(backup.tables).reduce((a, t) => a + (Array.isArray(t) ? t.length : 0), 0)),
+        created_at: backup.created_at
+      }
+    });
+
+    // Обновляем latest
+    await env.CATALOG.put('backups/latest.json', json, {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: { created_at: backup.created_at }
+    });
+
+    console.log(`D1 backup saved: ${key}`);
+    return { ok: true, key };
+  } catch(e) {
+    console.error('Backup failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(backupD1toR2(env));
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -69,6 +118,11 @@ export default {
     }
 
     // === API ===
+    if (path === '/api/backup' && method === 'POST') {
+      const result = await backupD1toR2(env);
+      return jsonOk(result);
+    }
+
     if (path === '/api/ping') {
       return jsonOk({ app: 'b24-catalog', time: new Date().toISOString() });
     }
