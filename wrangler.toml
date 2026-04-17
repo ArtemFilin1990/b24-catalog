@@ -1,0 +1,7 @@
+name = "b24-catalog"
+main = "src/index.js"
+compatibility_date = "2026-04-17"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
