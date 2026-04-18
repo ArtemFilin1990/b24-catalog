@@ -1,23 +1,23 @@
-name = "b24-catalog"
-main = "src/index.js"
-compatibility_date = "2026-04-17"
+name = 'ai-kb'
+main = 'src/index.js'
+compatibility_date = '2026-04-17'
 
 [assets]
-directory = "./public"
-binding = "ASSETS"
+directory = './public'
+binding = 'ASSETS'
 
 [[d1_databases]]
-binding = "DB"
-database_name = "baza"
-database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
+binding = 'DB'
+database_name = 'baza'
+database_id = '11a157a7-c3e0-4b6b-aa24-3026992db298'
 
 [[r2_buckets]]
-binding = "CATALOG"
-bucket_name = "vedro"
+binding = 'CATALOG'
+bucket_name = 'vedro'
 
-# Cron: бэкап D1 → R2 каждый день в 03:00 UTC
+# Cron: запуск D1 → R2 каждый день в 03:00 UTC
 [triggers]
-crons = ["0 3 * * *"]
+crons = ['0 3 * * *']
 
 [observability]
 enabled = true
