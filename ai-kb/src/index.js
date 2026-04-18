@@ -65,7 +65,7 @@ async function ask(question, env) {
   if (!question?.trim()) return err("question required");
   const rows = await search(question, env);
   const ctx = buildContext(rows);
-  const userMsg = ctx ? `${ctx}\nВопрос: ${question}` : question;
+  const userMsg = ctx ? `${ctx}\nВопросу: ${question}` : question;
 
   const resp = await env.AI.run(
     "@cf/meta/llama-3.1-8b-instruct",
