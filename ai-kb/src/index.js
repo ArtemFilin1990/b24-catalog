@@ -29,12 +29,14 @@ function err(m, s = 400) { return new Response(JSON.stringify({ ok: false, error
 async function search(q, env) {
   const clean = q.replace(/['"`;\\]/g, " ").trim().slice(0, 100);
   const results = [];
+
   try {
     const r = await env.DB.prepare(
       "SELECT brand, base_number, gost_equiv, d_inner, d_outer, width_mm FROM catalog WHERE base_number LIKE ? OR gost_equiv LIKE ? LIMIT 12"
     ).bind(`%${clean}%`, `%${clean}%`).all();
     if (r.results?.length) results.push(...r.results);
   } catch {}
+
   try {
     const r = await env.DB.prepare(
       "SELECT data FROM imported_rows WHERE deleted=0 AND base_number LIKE ? LIMIT 5"
@@ -47,6 +49,7 @@ async function search(q, env) {
       } catch {}
     }
   } catch {}
+
   return results.slice(0, 12);
 }
 
@@ -55,7 +58,7 @@ function buildContext(rows) {
   const lines = rows.map(r =>
     `• ${r.base_number} (${r.brand || "?"})${r.gost_equiv ? ` → ГОСT: ${r.gost_equiv}` : ""}${r.d_inner ? ` | d=${r.d_inner} D=${r.d_outer} B=${r.width_mm}` : ""}`
   );
-  return `\nИз базы (${rows.length} позиций):\n${lines.join("\n")}\n`;
+  return `\nИз базы (${rows.length} позиций)у:\n${lines.join("\n")}\n`;
 }
 
 async function ask(question, env) {
@@ -63,11 +66,20 @@ async function ask(question, env) {
   const rows = await search(question, env);
   const ctx = buildContext(rows);
   const userMsg = ctx ? `${ctx}\nВопрос: ${question}` : question;
+
   const resp = await env.AI.run(
     "@cf/meta/llama-3.1-8b-instruct",
-    { messages: [{ role: "system", content: SYSTEM },{ role: "user", content: userMsg }], max_tokens: 600, temperature: 0.25 },
+    {
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: userMsg }
+      ],
+      max_tokens: 600,
+      temperature: 0.25
+    },
     { gateway: { id: "b24", skipCache: false, cacheTtl: 3600 } }
   );
+
   const answer = resp?.response || resp?.result?.response || "Нет ответа от модели";
   return ok({ answer, sources: rows.length, model: "llama-3.1-8b-instruct" });
 }
@@ -77,8 +89,10 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method;
+
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     if (path === "/api/ping") return ok({ app: "ai-kb", catalog_rows: 58742, time: new Date().toISOString() });
+
     if (path === "/api/ask" && method === "POST") {
       let body; try { body = await req.json(); } catch { return err("Invalid JSON"); }
       return ask((body.question || body.message || "").trim(), env);
@@ -86,6 +100,7 @@ export default {
     if (path === "/api/ask" && method === "GET") {
       return ask((url.searchParams.get("q") || "").trim(), env);
     }
+
     const ar = await env.ASSETS.fetch(req);
     const h = new Headers(ar.headers);
     ["X-Frame-Options", "Content-Security-Policy"].forEach(k => h.delete(k));
