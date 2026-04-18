@@ -1,11 +1,7 @@
 // src/index.js
-// b24-catalog Worker: отдаёт каталог, хранит импорты и заявки в D1.
-// ФИКС: все ответы ассетов оборачиваются CSP/X-Frame для встраивания в Bitrix24.
-
-const BITRIX_WEBHOOK = 'https://ewerest.bitrix24.ru/rest/1/7p899kjck8sh8b3x';
+// Worker: отдаёт каталог, хранит импорты и заявки в D1.
 
 const FRAME_HEADERS = {
-  'Content-Security-Policy': "frame-ancestors 'self' https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.eu https://*.bitrix24.de",
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
@@ -107,7 +103,7 @@ async function askAi(question, env) {
     const rows = await searchCatalog(q, env);
     const ctx = buildAiContext(rows);
     const userMsg = ctx ? `${ctx}\nВопрос: ${q}` : q;
-    const aiGatewayId = String(env.AI_GATEWAY_ID || 'b24-catalog-ai-gateway');
+    const aiGatewayId = String(env.AI_GATEWAY_ID || 'catalog-ai-gateway');
 
     const resp = await env.AI.run(
       '@cf/meta/llama-3.1-8b-instruct',
@@ -130,20 +126,10 @@ async function askAi(question, env) {
   }
 }
 
-// Оборачивает ответ от ASSETS: удаляет X-Frame-Options (если стоит DENY),
-// добавляет frame-ancestors для Bitrix24
 async function wrapAssetResponse(assetResp) {
   const newHeaders = new Headers(assetResp.headers);
-  // Принудительно удаляем X-Frame-Options
-  newHeaders.delete('X-Frame-Options');
-  newHeaders.delete('x-frame-options');
-  // Удаляем старый CSP если есть
-  newHeaders.delete('Content-Security-Policy');
-  newHeaders.delete('content-security-policy');
-  // Удаляем ETag чтобы не было 304
   newHeaders.delete('ETag');
   newHeaders.delete('etag');
-  // Ставим наши CSP + no-cache
   for (const [k, v] of Object.entries(FRAME_HEADERS)) {
     newHeaders.set(k, v);
   }
@@ -220,7 +206,7 @@ export default {
     }
 
     if (path === '/api/ping') {
-      return jsonOk({ app: 'b24-catalog', time: new Date().toISOString() });
+      return jsonOk({ app: 'catalog', time: new Date().toISOString() });
     }
 
     if (path === '/api/ask' && method === 'POST') {
@@ -310,66 +296,17 @@ export default {
       if (!contact.phone && !contact.email) return jsonErr('contact.phone или contact.email обязательны', 400);
       const items = Array.isArray(body.items) ? body.items : [];
       const total = Number(body.total || 0);
-      const orderDate = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
-      const dealTitle = `Заявка с каталога — ${contact.company || contact.name || 'клиент'} — ${orderDate}`;
-      const comments = [
-        `Заявка с каталога от ${orderDate}`, '',
-        `Компания: ${contact.company || '[[TBD]]'}`,
-        `ИНН: ${contact.inn || '[[TBD]]'}`,
-        `Контакт: ${contact.name || '[[TBD]]'}`,
-        `Телефон: ${contact.phone || '[[TBD]]'}`,
-        `Email: ${contact.email || '[[TBD]]'}`, '',
-        contact.comment ? `Комментарий:\n${contact.comment}\n` : '',
-        `Состав (${items.length} поз., ${total.toLocaleString('ru-RU')} ₽):`,
-        ...items.map((it, i) =>
-          `${i + 1}. ${it.article || it.base_number} — ${it.qty || it.quantity} шт` +
-          (it.price > 0 ? ` × ${it.price} ₽` : ' (по запросу)')
-        )
-      ].filter(Boolean).join('\n');
-      let dealId = null, bitrixError = null;
-      try {
-        const dealRes = await fetch(`${BITRIX_WEBHOOK}/crm.deal.add.json`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fields: {
-              TITLE: dealTitle, COMMENTS: comments, OPPORTUNITY: total,
-              CURRENCY_ID: 'RUB', TYPE_ID: 'SALE', CATEGORY_ID: 87,
-              SOURCE_ID: 'WEB', SOURCE_DESCRIPTION: 'Каталог ewerest.ru',
-              ASSIGNED_BY_ID: 1
-            }
-          })
-        });
-        const dealData = await dealRes.json();
-        if (dealData.error) bitrixError = dealData.error_description || dealData.error;
-        else {
-          dealId = dealData.result;
-          if (items.length > 0) {
-            const productRows = items.map(it => ({
-              PRODUCT_NAME: it.article || it.base_number || 'Позиция',
-              PRICE: Number(it.price || 0),
-              QUANTITY: Number(it.qty || it.quantity || 1),
-              TAX_RATE: 22, TAX_INCLUDED: 'Y',
-              MEASURE_CODE: 796, MEASURE_NAME: 'шт'
-            }));
-            await fetch(`${BITRIX_WEBHOOK}/crm.deal.productrows.set.json`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: dealId, rows: productRows })
-            });
-          }
-        }
-      } catch (e) { bitrixError = e.message; }
       try {
         const rs = await env.DB.prepare(
-          `INSERT INTO orders (bitrix_deal_id, company_name, inn, contact_name, phone, email, comment, total_rub, items_json, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO orders (company_name, inn, contact_name, phone, email, comment, total_rub, items_json, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
-          dealId, contact.company || null, contact.inn || null,
+          contact.company || null, contact.inn || null,
           contact.name || null, contact.phone || null, contact.email || null,
           contact.comment || null, total, JSON.stringify(items),
-          bitrixError ? 'bitrix_failed' : 'sent'
+          'new'
         ).run();
-        return jsonOk({ order_id: rs.meta?.last_row_id, bitrix_deal_id: dealId, bitrix_error: bitrixError });
+        return jsonOk({ order_id: rs.meta?.last_row_id });
       } catch (e) { return jsonErr('DB write failed: ' + e.message, 500); }
     }
 
@@ -419,18 +356,7 @@ export default {
       } catch(e) { return jsonErr('R2 read failed: ' + e.message, 500); }
     }
 
-    // === ASSETS — с обёрткой CSP для iframe Bitrix24 ===
-    if (path === '/install' || path === '/install.html') {
-      const r = await env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
-      return wrapAssetResponse(r);
-    }
-
-    // Bitrix24 приложение делает POST на / при установке - отдаём install.html
-    if (method === 'POST' && (path === '/' || path === '/app')) {
-      const r = await env.ASSETS.fetch(new Request(`${url.origin}/install.html`, request));
-      return wrapAssetResponse(r);
-    }
-
+    // === ASSETS ===
     if (path === '/' || path === '/app') {
       const r = await env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
       return wrapAssetResponse(r);
