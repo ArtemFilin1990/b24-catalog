@@ -89,26 +89,32 @@
             sessionStorage.setItem(storageKey, chosenUrl);
         }
 
-        // Tambahkan cache busting ke URL iframe (timestamp unik)
-        const cacheBuster = new Date().getTime();  // Timestamp untuk memaksa no-cache
-        const iframeSrc = `${chosenUrl}&cb=${cacheBuster}`;  // Append ?cb=timestamp jika URL sudah punya query
+        // Helper untuk menambahkan cache buster dengan benar baik URL punya query string atau tidak
+        const withCacheBuster = (url) => {
+            const separator = url.includes('?') ? '&' : '?';
+            return `${url}${separator}cb=${new Date().getTime()}`;
+        };
 
-        // Set src iframe
-        iframe.src = iframeSrc;
+        // Set src iframe dengan cache busting
+        iframe.src = withCacheBuster(chosenUrl);
 
         // Event onload untuk sembunyikan loading
         iframe.onload = () => {
             loadingElement.style.display = 'none';
         };
 
-        // Fallback: Jika iframe gagal load (misalnya URL lama invalid), pilih ulang
-        iframe.onerror = async () => {
-            console.warn('Iframe load failed, rechoosing server...');
-            sessionStorage.removeItem(storageKey);  // Hapus storage lama
+        // Fallback: iframe.onerror tidak terpicu untuk cross-origin, jadi pakai timeout health check
+        const LOAD_TIMEOUT_MS = 15000;
+        const loadTimeout = setTimeout(async () => {
+            if (loadingElement.style.display === 'none') return;  // Sudah load, abaikan
+            console.warn('Iframe load timeout, rechoosing server...');
+            sessionStorage.removeItem(storageKey);
             chosenUrl = await chooseServer();
             sessionStorage.setItem(storageKey, chosenUrl);
-            iframe.src = `${chosenUrl}&cb=${new Date().getTime()}`;
-        };
+            iframe.src = withCacheBuster(chosenUrl);
+        }, LOAD_TIMEOUT_MS);
+
+        iframe.addEventListener('load', () => clearTimeout(loadTimeout), { once: true });
     }
 
     // Jalankan loadStreamlit saat halaman dimuat
