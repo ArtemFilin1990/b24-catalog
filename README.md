@@ -1,45 +1,55 @@
 # b24-catalog — Каталог подшипников для Bitrix24
 
-Cloudflare Worker с D1 базой для B2B каталога ООО Эверест.
+Cloudflare Worker с D1 базой и R2 бакетом для B2B-каталога ООО «Эверест».
 
 ## Архитектура
 
-- **Worker** `b24-catalog` отдаёт HTML каталога + обрабатывает API
-- **Assets** в `public/` — HTML каталога 2.38 MB + install.html
-- **D1 база** `baza` (id: `11a157a7-c3e0-4b6b-aa24-3026992db298`) — импорты и заявки
+- **Worker** `b24-catalog` — отдаёт HTML каталога и обрабатывает API.
+- **Assets** в `public/` — `index.html` (каталог) и `install.html` (обработчик установки Bitrix24).
+- **D1 база** `baza` (id: `11a157a7-c3e0-4b6b-aa24-3026992db298`) — импорты и заявки.
+- **R2 бакет** `vedro` (binding `CATALOG`) — `catalog.gz` с данными каталога и ежедневные бэкапы D1.
+- **Cron** `0 3 * * *` — ежедневный бэкап таблиц D1 в R2 (`backups/d1-backup-*.json` + `backups/latest.json`).
 
 ## API endpoints
 
 | Путь | Метод | Что делает |
 |---|---|---|
-| `/` | GET | Каталог HTML (86191 позиций) |
-| `/app` | GET | Алиас для `/` (для Bitrix24) |
-| `/install` | GET/POST | Bitrix24 install handler |
+| `/` | GET | Каталог (HTML из `public/index.html`) |
+| `/` | POST | Bitrix24 install handler (отдаёт `install.html`) |
+| `/app` | GET / POST | Алиас для `/` (для Bitrix24) |
+| `/install` | GET / POST | Bitrix24 install handler |
+| `/catalog.gz` | GET | `catalog.gz` из R2 (данные каталога) |
 | `/api/ping` | GET | Healthcheck |
 | `/api/imports` | GET | Все активные импорты |
 | `/api/imports` | POST | Сохранить пакет строк |
-| `/api/imports/:session_id` | DELETE | Удалить сессию |
+| `/api/imports/:session_id` | DELETE | Пометить сессию удалённой (soft delete) |
 | `/api/sessions` | GET | Список сессий импорта |
-| `/api/orders` | POST | Создать заявку + в Bitrix24 |
+| `/api/orders` | POST | Создать заявку + отправить в Bitrix24 |
 | `/api/orders` | GET | Список заявок |
+| `/api/backup` | POST | Ручной бэкап D1 → R2 |
+| `/api/admin/upload-catalog` | POST | Загрузка `catalog.gz` в R2 (нужен заголовок `x-upload-token`) |
+
+Все ответы ассетов оборачиваются заголовками CSP (`frame-ancestors` для `*.bitrix24.*`) и CORS, чтобы каталог можно было встраивать в iframe Bitrix24.
 
 ## В Bitrix24
 
-URL обработчика в приложении `app/1535/`:
+URL обработчика в приложении (`app/1535/`):
+
 ```
 https://b24-catalog.35ewerest.workers.dev/
 ```
 
 URL установки:
+
 ```
 https://b24-catalog.35ewerest.workers.dev/install
 ```
 
 ## D1 таблицы
 
-- `imported_rows` — импортированные позиции
-- `import_sessions` — сессии загрузки
-- `orders` — заявки (копия того что ушло в Bitrix24)
+- `imported_rows` — импортированные позиции (флаг `deleted` для soft delete).
+- `import_sessions` — сессии загрузки (файл, формат, автор, статус).
+- `orders` — заявки (копия того, что ушло в Bitrix24).
 
 ## Bitrix24 webhook
 
