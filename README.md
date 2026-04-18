@@ -54,3 +54,45 @@ https://b24-catalog.35ewerest.workers.dev/install
 ## Bitrix24 webhook
 
 Заявки уходят в воронку 87 («Холодные звонки») — единственная без обязательного поля «Кол-во дней отсрочки».
+
+## Подключение и окружение Cloudflare
+
+Перед деплоем/миграциями подключите `wrangler` к аккаунту Cloudflare:
+
+```bash
+npx wrangler login
+npx wrangler whoami
+```
+
+Проверьте, что доступны ресурсы из `wrangler.toml` (`baza`, `vedro`):
+
+```bash
+npx wrangler d1 list
+npx wrangler r2 bucket list
+```
+
+### Обязательные секреты Worker
+
+В Worker используются секреты окружения:
+
+- `BITRIX_WEBHOOK` — базовый URL Bitrix24 webhook (без завершающего `/`).
+- `UPLOAD_TOKEN` — токен для `POST /api/admin/upload-catalog` (заголовок `x-upload-token`).
+
+Для локальной разработки создайте `.dev.vars` из шаблона:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+Задать секреты:
+
+```bash
+npx wrangler secret put BITRIX_WEBHOOK
+npx wrangler secret put UPLOAD_TOKEN
+```
+
+После настройки окружения можно выполнять деплой:
+
+```bash
+npx wrangler deploy
+```

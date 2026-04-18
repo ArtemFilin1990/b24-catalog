@@ -2,8 +2,6 @@
 // b24-catalog Worker: отдаёт каталог, хранит импорты и заявки в D1.
 // ФИКС: все ответы ассетов оборачиваются CSP/X-Frame для встраивания в Bitrix24.
 
-const BITRIX_WEBHOOK = 'https://ewerest.bitrix24.ru/rest/1/7p899kjck8sh8b3x';
-
 const FRAME_HEADERS = {
   'Content-Security-Policy': "frame-ancestors 'self' https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.eu https://*.bitrix24.de",
   'Access-Control-Allow-Origin': '*',
@@ -40,6 +38,12 @@ function jsonErr(message, status = 400) {
   return new Response(JSON.stringify({ ok: false, error: message }), {
     status, headers: JSON_HEADERS
   });
+}
+
+function getEnvString(env, key) {
+  const raw = env?.[key];
+  if (typeof raw !== 'string') return '';
+  return raw.trim();
 }
 
 async function readJSON(request) {
@@ -305,6 +309,8 @@ export default {
 
     if (path === '/api/orders' && method === 'POST') {
       const body = await readJSON(request);
+      const bitrixWebhook = getEnvString(env, 'BITRIX_WEBHOOK');
+      if (!bitrixWebhook) return jsonErr('BITRIX_WEBHOOK is not configured', 500);
       if (!body || !body.contact) return jsonErr('contact{} required', 400);
       const contact = body.contact;
       if (!contact.phone && !contact.email) return jsonErr('contact.phone или contact.email обязательны', 400);
@@ -328,7 +334,7 @@ export default {
       ].filter(Boolean).join('\n');
       let dealId = null, bitrixError = null;
       try {
-        const dealRes = await fetch(`${BITRIX_WEBHOOK}/crm.deal.add.json`, {
+        const dealRes = await fetch(`${bitrixWebhook}/crm.deal.add.json`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -352,7 +358,7 @@ export default {
               TAX_RATE: 22, TAX_INCLUDED: 'Y',
               MEASURE_CODE: 796, MEASURE_NAME: 'шт'
             }));
-            await fetch(`${BITRIX_WEBHOOK}/crm.deal.productrows.set.json`, {
+            await fetch(`${bitrixWebhook}/crm.deal.productrows.set.json`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ id: dealId, rows: productRows })
             });
@@ -383,8 +389,10 @@ export default {
     // === R2 каталог — отдаём gzip из бакета CATALOG ===
         // Admin endpoint: upload catalog.gz to R2 (token-protected)
     if (path === "/api/admin/upload-catalog" && method === "POST") {
+      const uploadToken = getEnvString(env, 'UPLOAD_TOKEN');
+      if (!uploadToken) return jsonErr('UPLOAD_TOKEN is not configured', 500);
       const token = request.headers.get("x-upload-token");
-      if (token !== "045IUUAOXJy3aN8XrcHSVRQixAOZekA766trlu7OvIU") {
+      if (token !== uploadToken) {
         return jsonErr("Unauthorized", 401);
       }
       try {
