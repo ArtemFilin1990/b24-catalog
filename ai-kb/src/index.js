@@ -29,7 +29,7 @@ async function ask(question,sid,env){
   for(const h of history)messages.push({role:h.role==="user"?"user":"assistant",content:h.content});
   messages.push({role:"user",content:ctx?`${ctx}\nВопрос: ${question}`:question});
   try{
-    const resp=await env.AI.run("@cf/meta/llama-3.1-8b-instruct",{messages,max_tokens:600,temperature:0.25},{gateway:{id:"b24",skipCache:false,cacheTtl:3600}});
+    const resp=await env.AI.run("@cf/meta/llama-3.1-8b-instruct",{messages,max_tokens:600,temperature:0.25},{gateway:{id:"catalog",skipCache:false,cacheTtl:3600}});
     const answer=resp?.response||resp?.result?.response||"Нет ответа от модели";
     if(sid)await saveMemory(sid,question,answer,rows.length,env);
     return ok({answer,sources:rows.length,session_id:sid,model:"llama-3.1-8b-instruct"});
