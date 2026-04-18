@@ -1,6 +1,6 @@
 name = "ai-kb"
 main = "src/index.js"
-compatibility_date = "2025-04-01"
+compatibility_date = "2026-04-17"
 account_id = "84cbacc4816c29c294101ec57a0bea5d"
 
 [ai]
@@ -19,8 +19,12 @@ bucket_name = "vedro"
 directory = "./public"
 binding = "ASSETS"
 
+# Cron: запуск D1 → R2 каждый день в 03:00 UTC
+[triggers]
+crons = ["0 3 * * *"]
+
 [observability]
-enabled = false
+enabled = true
 head_sampling_rate = 1
 
   [observability.logs]
