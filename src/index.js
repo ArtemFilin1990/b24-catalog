@@ -18,6 +18,18 @@ const JSON_HEADERS = {
   'Cache-Control': 'no-store',
 };
 
+const AI_SYSTEM = `Ты — опытный специалист по подшипникам компании ТД «Эверест» (Вологда).
+Помогаешь клиентам: подобрать подшипник, найти аналог, расшифровать обозначение, понять технические характеристики.
+Отвечай кратко и по делу на русском языке. Используй данные из базы если они переданы.
+
+Правила:
+- Аналоги только при полном совпадении d/D/B и типа подшипника
+- Если аналога нет — пиши "NO DIRECT EQUIV"
+- 2RS/DDU = резиновое уплотнение; ZZ = металлический щит
+- Зазор C3 = увеличенный; C0 = нормальный
+- Указывай конкретные позиции из базы если они есть`;
+const AI_CACHE_TTL_SECONDS = 3600;
+
 function jsonOk(data, extra = {}) {
   return new Response(JSON.stringify({ ok: true, ...data }), {
     status: 200, headers: { ...JSON_HEADERS, ...extra }
@@ -32,6 +44,90 @@ function jsonErr(message, status = 400) {
 
 async function readJSON(request) {
   try { return await request.json(); } catch (e) { return null; }
+}
+
+async function searchCatalog(query, env) {
+  const clean = String(query || '').trim().slice(0, 100);
+  const results = [];
+
+  if (!clean) return results;
+
+  try {
+    const rs = await env.DB.prepare(
+      'SELECT brand, base_number, gost_equiv, d_inner, d_outer, width_mm FROM catalog WHERE base_number LIKE ? OR gost_equiv LIKE ? LIMIT 12'
+    ).bind(`%${clean}%`, `%${clean}%`).all();
+    if (rs.results?.length) results.push(...rs.results);
+  } catch (e) {}
+
+  try {
+    const rs = await env.DB.prepare(
+      'SELECT data FROM imported_rows WHERE deleted = 0 AND base_number LIKE ? LIMIT 5'
+    ).bind(`%${clean}%`).all();
+    const seen = new Set(results.map(x => x.base_number).filter(Boolean));
+    for (const row of rs.results || []) {
+      try {
+        const d = JSON.parse(row.data);
+        if (d.designation && !seen.has(d.designation)) {
+          results.push({
+            brand: d.brand,
+            base_number: d.designation,
+            d_inner: d.d,
+            d_outer: d.D,
+            width_mm: d.B
+          });
+          seen.add(d.designation);
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  return results.slice(0, 12);
+}
+
+function buildAiContext(rows) {
+  if (!rows.length) return '';
+  const lines = rows.map(r =>
+    `• ${r.base_number} (${r.brand || '?'})${r.gost_equiv ? ` → ГОСТ: ${r.gost_equiv}` : ''}${r.d_inner ? ` | d=${r.d_inner} D=${r.d_outer} B=${r.width_mm}` : ''}`
+  );
+  return `\nИз базы (${rows.length} позиций):\n${lines.join('\n')}\n`;
+}
+
+function extractAiAnswer(resp) {
+  if (typeof resp?.response === 'string') return resp.response;
+  if (typeof resp?.result?.response === 'string') return resp.result.response;
+  return null;
+}
+
+async function askAi(question, env) {
+  const q = String(question || '').trim();
+  if (!q) return jsonErr('question required', 400);
+  if (!env.AI) return jsonErr('AI binding not configured', 500);
+
+  try {
+    const rows = await searchCatalog(q, env);
+    const ctx = buildAiContext(rows);
+    const userMsg = ctx ? `${ctx}\nВопрос: ${q}` : q;
+    const aiGatewayId = String(env.AI_GATEWAY_ID || 'b24-catalog-ai-gateway');
+
+    const resp = await env.AI.run(
+      '@cf/meta/llama-3.1-8b-instruct',
+      {
+        messages: [
+          { role: 'system', content: AI_SYSTEM },
+          { role: 'user', content: userMsg }
+        ],
+        max_tokens: 600,
+        temperature: 0.25
+      },
+      { gateway: { id: aiGatewayId, skipCache: false, cacheTtl: AI_CACHE_TTL_SECONDS } }
+    );
+
+    const answer = extractAiAnswer(resp);
+    if (!answer) return jsonErr('AI service returned no response - model may be unavailable or request is unsupported', 502);
+    return jsonOk({ answer, sources: rows.length, model: 'llama-3.1-8b-instruct' });
+  } catch (e) {
+    return jsonErr('AI request failed: ' + e.message, 500);
+  }
 }
 
 // Оборачивает ответ от ASSETS: удаляет X-Frame-Options (если стоит DENY),
@@ -125,6 +221,17 @@ export default {
 
     if (path === '/api/ping') {
       return jsonOk({ app: 'b24-catalog', time: new Date().toISOString() });
+    }
+
+    if (path === '/api/ask' && method === 'POST') {
+      const body = await readJSON(request);
+      const question = (body?.question || body?.message || '').trim();
+      return askAi(question, env);
+    }
+
+    if (path === '/api/ask' && method === 'GET') {
+      const question = (url.searchParams.get('q') || '').trim();
+      return askAi(question, env);
     }
 
     if (path === '/api/imports' && method === 'GET') {
