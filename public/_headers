@@ -1,4 +1,4 @@
 /*
-  Content-Security-Policy: frame-ancestors 'self' https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.eu https://*.bitrix24.de
+  Content-Security-Policy: frame-ancestors 'self'
   Access-Control-Allow-Origin: *
   Cache-Control: no-store

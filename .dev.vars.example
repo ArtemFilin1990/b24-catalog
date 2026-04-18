@@ -1,6 +1,5 @@
 # Cloudflare Worker local development variables
 # Copy this file to `.dev.vars` and set real values.
 
-BITRIX_WEBHOOK=
 UPLOAD_TOKEN=
 AI_GATEWAY_ID=b24-catalog-ai-gateway

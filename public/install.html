@@ -3,81 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Установка Каталога подшипников</title>
-  <script src="//api.bitrix24.com/api/v1/"></script>
+  <title>Каталог подшипников</title>
   <style>
     body { margin: 0; padding: 24px; font-family: system-ui, Arial, sans-serif; background: #f4f6f8; color: #111; }
     .wrap { max-width: 760px; margin: 0 auto; }
     .card { background: #fff; border-radius: 14px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,.08); }
     h1 { margin: 0 0 16px; font-size: 26px; }
-    .status { margin: 0 0 16px; padding: 14px 16px; border-radius: 10px; background: #f1f5f9; font-size: 14px; line-height: 1.5; }
-    .status.ok { background: #ecfdf5; color: #065f46; }
-    .status.err { background: #fee2e2; color: #991b1b; }
-    button { padding: 12px 22px; border: 0; border-radius: 10px; background: #ee690b; color: #fff; cursor: pointer; font-size: 15px; font-weight: 600; }
-    button:disabled { opacity: .4; cursor: not-allowed; }
-    .hint { margin-top: 16px; font-size: 13px; color: #666; line-height: 1.5; }
-    pre { margin-top: 16px; padding: 14px; background: #0b1014; color: #d1fae5; border-radius: 10px; overflow: auto; min-height: 60px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 300px; }
+    p { margin: 0 0 12px; line-height: 1.5; color: #334155; }
+    a { color: #0f766e; font-weight: 600; text-decoration: none; }
   </style>
 </head>
 <body>
-  <div class="wrap"><div class="card">
-    <h1>Установка Каталога подшипников</h1>
-    <div class="status" id="status">Инициализация Bitrix24...</div>
-    <button id="finishBtn" disabled>Завершить установку</button>
-    <div class="hint">
-      После завершения установки пункт <b>Каталог подшипников</b> появится в левом меню Bitrix24.
+  <div class="wrap">
+    <div class="card">
+      <h1>Каталог подшипников</h1>
+      <p>Служебная страница установки доступна.</p>
+      <p>Откройте каталог по ссылке: <a href="/">/</a></p>
     </div>
-    <pre id="log"></pre>
-  </div></div>
-
-  <script>
-    var $ = function(id) { return document.getElementById(id); };
-    var statusEl = $('status');
-    var logEl = $('log');
-    var finishBtn = $('finishBtn');
-
-    function log(msg, data) {
-      var line = '[' + new Date().toLocaleTimeString('ru') + '] ' + msg;
-      if (data !== undefined) {
-        try { line += ' ' + JSON.stringify(data, null, 2); }
-        catch (e) { line += ' ' + String(data); }
-      }
-      logEl.textContent += line + '\n';
-    }
-
-    function setStatus(text, cls) {
-      statusEl.textContent = text;
-      statusEl.className = 'status ' + (cls || '');
-    }
-
-    if (typeof BX24 === 'undefined') {
-      setStatus('Ошибка: BX24.js не загрузился. Откройте эту страницу из Bitrix24.', 'err');
-      log('BX24 undefined');
-    } else {
-      BX24.init(function() {
-        setStatus('BX24 готов. Нажмите Завершить установку.', 'ok');
-        finishBtn.disabled = false;
-        log('BX24.init OK');
-        try { BX24.resizeWindow(900, 600); } catch (e) {}
-
-        BX24.callMethod('app.info', {}, function(res) {
-          if (res.error()) { log('app.info error', res.error()); return; }
-          log('app.info', res.data());
-        });
-      });
-    }
-
-    finishBtn.addEventListener('click', function() {
-      setStatus('Завершение установки...', '');
-      log('installFinish()');
-      try {
-        BX24.installFinish();
-        setStatus('Установка завершена. Приложение появится в левом меню.', 'ok');
-      } catch (e) {
-        setStatus('Ошибка: ' + e.message, 'err');
-        log('installFinish error', e.message);
-      }
-    });
-  </script>
+  </div>
 </body>
 </html>
