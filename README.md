@@ -1,35 +1,85 @@
 # Каталог подшипников
 
-Cloudflare Worker с D1 базой и R2 бакетом для B2B-каталога ООО «Эверест».
+B2B-каталог подшипников для ООО «Эверест» / ТД «Эверест» (Вологда). Два независимых Cloudflare Workers в одном репозитории, работающих с общей D1-базой и R2-бакетом.
 
-## Архитектура
+## Структура проекта
 
-- **Worker** `b24-catalog` — отдаёт HTML каталога и обрабатывает API.
-- **Assets** в `public/` — `index.html` (каталог).
-- **D1 база** `baza` (id: `11a157a7-c3e0-4b6b-aa24-3026992db298`) — импорты и заявки.
-- **R2 бакет** `vedro` (binding `CATALOG`) — `catalog.gz` с данными каталога и ежедневные бэкапы D1.
-- **Cron** `0 3 * * *` — ежедневный бэкап таблиц D1 в R2 (`backups/d1-backup-*.json` + `backups/latest.json`).
+```
+b24-catalog/          # Основной Worker: каталог + API импортов/заявок
+ai-kb/                # AI-воркер: чат-консультант с памятью сессий
+data/                 # Источники данных (XLSX, catalog.gz, скрипт генерации)
+public/               # Статика основного воркера (SPA каталога)
+```
 
-## API endpoints
+## Workers
+
+### b24-catalog (корень репозитория)
+
+Отдаёт HTML каталога, обрабатывает API импортов и заявок, запускает ежедневный бэкап D1 → R2.
+
+**Ресурсы:**
+- Assets в `public/` — `index.html` (SPA каталога)
+- D1 база `baza` — импорты, сессии, заявки
+- R2 бакет `vedro` — `catalog.gz` и бэкапы (`backups/`)
+- Cron `0 3 * * *` — ежедневный бэкап D1 → R2
+
+**API endpoints:**
 
 | Путь | Метод | Что делает |
 |---|---|---|
-| `/` | GET | Каталог (HTML из `public/index.html`) |
-| `/app` | GET | Алиас для `/` |
-| `/catalog.gz` | GET | `catalog.gz` из R2 (данные каталога) |
+| `/`, `/app` | GET | Каталог (HTML) |
+| `/catalog.gz` | GET | `catalog.gz` из R2 |
 | `/api/ping` | GET | Healthcheck |
 | `/api/ask` | GET/POST | AI-консультация (Workers AI + D1) |
 | `/api/imports` | GET | Все активные импорты |
 | `/api/imports` | POST | Сохранить пакет строк |
-| `/api/imports/:session_id` | DELETE | Пометить сессию удалённой (soft delete) |
+| `/api/imports/:session_id` | DELETE | Soft-delete сессии (`deleted = 1`) |
 | `/api/sessions` | GET | Список сессий импорта |
-| `/api/orders` | POST | Создать заявку (сохраняется в D1) |
-| `/api/orders` | GET | Список заявок |
+| `/api/orders` | GET/POST | Список / создание заявки |
 | `/api/backup` | POST | Ручной бэкап D1 → R2 |
-| `/api/admin/upload-catalog` | POST | Загрузка `catalog.gz` в R2 (нужен заголовок `x-upload-token`) |
+| `/api/admin/upload-catalog` | POST | Загрузка `catalog.gz` в R2 (заголовок `x-upload-token`) |
+
+### ai-kb (`ai-kb/`)
+
+Самостоятельный AI-чат с памятью переписки на сессию. Подробнее — в [`ai-kb/README.md`](ai-kb/README.md).
+
+**API endpoints:**
+
+| Путь | Метод | Что делает |
+|---|---|---|
+| `/api/ping` | GET | Healthcheck |
+| `/api/ask` | GET/POST | Вопрос AI (опциональный `session_id` для памяти) |
+| `/api/history/:session_id` | GET | История переписки сессии |
+| `/api/history/:session_id` | DELETE | Очистить память сессии |
 
 ## D1 таблицы
 
+- `catalog` — каталог подшипников (только чтение, предзаполнена).
 - `imported_rows` — импортированные позиции (флаг `deleted` для soft delete).
 - `import_sessions` — сессии загрузки (файл, формат, автор, статус).
 - `orders` — заявки клиентов.
+- `chat_memory` — история переписки AI-чата (ai-kb).
+
+## Данные каталога
+
+Источник данных — `data/ewerest_bearing_catalog_filled_all.xlsx`. Для пересборки каталога:
+
+```bash
+python data/gen_catalog.py   # → data/catalog.gz
+```
+
+`catalog.gz` коммитится в репозиторий; при деплое `deploy.yml` загружает его в R2 (`vedro/catalog.gz`).
+
+## Деплой
+
+Автоматически при пуше в `main`:
+- Корневые изменения → `.github/workflows/deploy.yml` (загружает `catalog.gz`, деплоит `b24-catalog`)
+- Изменения в `ai-kb/**` → `.github/workflows/deploy-ai-kb.yml` (деплоит `ai-kb`)
+
+Требуется секрет `CF_API_TOKEN`.
+
+Ручной деплой:
+```bash
+npx wrangler deploy          # b24-catalog
+cd ai-kb && npx wrangler deploy  # ai-kb
+```
