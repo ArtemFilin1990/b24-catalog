@@ -1,7 +1,35 @@
+name = "ai-kb"
+main = "src/index.js"
+compatibility_date = "2025-04-01"
+account_id = "84cbacc4816c29c294101ec57a0bea5d"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "baza"
+database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
+
+[[r2_buckets]]
+binding = "CATALOG"
+bucket_name = "vedro"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 [observability]
+enabled = false
+head_sampling_rate = 1
+
   [observability.logs]
   enabled = true
+  head_sampling_rate = 1
+  persist = true
   invocation_logs = true
 
   [observability.traces]
   enabled = false
+  persist = true
+  head_sampling_rate = 1
