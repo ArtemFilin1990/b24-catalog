@@ -1,0 +1,7 @@
+name = "grok-4-heavy-free"
+compatibility_date = "2026-04-17"
+account_id = "84cbacc4816c29c294101ec57a0bea5d"
+
+[assets]
+directory = "./"
+not_found_handling = "single-page-application"

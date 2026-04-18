@@ -1,0 +1,6 @@
+name = "deepseek-v3-2"
+compatibility_date = "2026-04-17"
+account_id = "84cbacc4816c29c294101ec57a0bea5d"
+
+[assets]
+directory = "./"
