@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Grok 4 Heavy Free</title>
-    
-    <!-- Meta tags untuk mencegah caching halaman HTML -->
+
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    
+
     <style>
         html, body {
             margin: 0;
@@ -38,81 +37,24 @@
     </style>
 </head>
 <body>
-    <div id="loading">Please wait Memilih server optimal...</div>
+    <div id="loading">Please wait, loading...</div>
     <iframe id="streamlit-frame"></iframe>
 
     <script>
-    // Ganti ini dengan versi baru setiap kali Anda update link SERVERS (misalnya "v2", "v3", dll.)
-    const VERSION = "v1";  // Ubah ini ke nilai baru untuk memaksa update (contoh: "v2" saat link berubah)
+    const SERVER_URL = "https://balianone-iy6vtfcc5aphp7b6mrjjqv.streamlit.app/?embed=true";
 
-    // Array server dengan link baru Anda (ganti sesuai kebutuhan)
-    const SERVERS = [
-        "https://balianone-iy6vtfcc5aphp7b6mrjjqv.streamlit.app/?embed=true",  // Ganti dengan link baru
-        
-    ];
-
-    // Fungsi untuk mengecek kecepatan respons server (sama seperti sebelumnya, tapi tambah timeout)
-    async function checkServerSpeed(url) {
-        const start = performance.now();
-        try {
-            const response = await Promise.race([
-                fetch(url, { method: 'HEAD', mode: 'no-cors' }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))  // Timeout 5 detik
-            ]);
-            const end = performance.now();
-            return end - start;
-        } catch (error) {
-            console.error(`Error checking ${url}:`, error);
-            return Infinity;
-        }
-    }
-
-    // Fungsi untuk memilih server berdasarkan kecepatan respons
-    async function chooseServer() {
-        const speeds = await Promise.all(SERVERS.map(checkServerSpeed));
-        const fastestIndex = speeds.indexOf(Math.min(...speeds));
-        return SERVERS[fastestIndex];
-    }
-
-    // Fungsi untuk memuat Streamlit
-    async function loadStreamlit() {
+    window.onload = () => {
         const loadingElement = document.getElementById('loading');
         const iframe = document.getElementById('streamlit-frame');
 
-        // Gunakan key sessionStorage dengan VERSION untuk cache busting
-        const storageKey = `streamlitUrl_${VERSION}`;
-        let chosenUrl = sessionStorage.getItem(storageKey);
+        const cacheBuster = Date.now();
+        const separator = SERVER_URL.includes('?') ? '&' : '?';
+        iframe.src = `${SERVER_URL}${separator}cb=${cacheBuster}`;
 
-        if (!chosenUrl) {
-            // Jika belum ada atau version berubah, pilih server baru dan simpan
-            chosenUrl = await chooseServer();
-            sessionStorage.setItem(storageKey, chosenUrl);
-        }
-
-        // Tambahkan cache busting ke URL iframe (timestamp unik)
-        const cacheBuster = new Date().getTime();  // Timestamp untuk memaksa no-cache
-        const iframeSrc = `${chosenUrl}&cb=${cacheBuster}`;  // Append ?cb=timestamp jika URL sudah punya query
-
-        // Set src iframe
-        iframe.src = iframeSrc;
-
-        // Event onload untuk sembunyikan loading
         iframe.onload = () => {
             loadingElement.style.display = 'none';
         };
-
-        // Fallback: Jika iframe gagal load (misalnya URL lama invalid), pilih ulang
-        iframe.onerror = async () => {
-            console.warn('Iframe load failed, rechoosing server...');
-            sessionStorage.removeItem(storageKey);  // Hapus storage lama
-            chosenUrl = await chooseServer();
-            sessionStorage.setItem(storageKey, chosenUrl);
-            iframe.src = `${chosenUrl}&cb=${new Date().getTime()}`;
-        };
-    }
-
-    // Jalankan loadStreamlit saat halaman dimuat
-    window.onload = loadStreamlit;
+    };
     </script>
 </body>
 </html>
