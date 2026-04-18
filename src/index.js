@@ -107,6 +107,7 @@ async function askAi(question, env) {
     const rows = await searchCatalog(q, env);
     const ctx = buildAiContext(rows);
     const userMsg = ctx ? `${ctx}\nВопрос: ${q}` : q;
+    const aiGatewayId = String(env.AI_GATEWAY_ID || 'b24');
 
     const resp = await env.AI.run(
       '@cf/meta/llama-3.1-8b-instruct',
@@ -118,7 +119,7 @@ async function askAi(question, env) {
         max_tokens: 600,
         temperature: 0.25
       },
-      { gateway: { id: 'b24', skipCache: false, cacheTtl: AI_CACHE_TTL_SECONDS } }
+      { gateway: { id: aiGatewayId, skipCache: false, cacheTtl: AI_CACHE_TTL_SECONDS } }
     );
 
     const answer = extractAiAnswer(resp);
