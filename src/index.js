@@ -107,7 +107,7 @@ async function askAi(question, env) {
     const rows = await searchCatalog(q, env);
     const ctx = buildAiContext(rows);
     const userMsg = ctx ? `${ctx}\nВопрос: ${q}` : q;
-    const aiGatewayId = String(env.AI_GATEWAY_ID || 'b24');
+    const aiGatewayId = String(env.AI_GATEWAY_ID || 'b24-catalog-ai-gateway');
 
     const resp = await env.AI.run(
       '@cf/meta/llama-3.1-8b-instruct',
@@ -123,7 +123,7 @@ async function askAi(question, env) {
     );
 
     const answer = extractAiAnswer(resp);
-    if (!answer) return jsonErr('AI returned empty response', 502);
+    if (!answer) return jsonErr('AI service returned no response - model may be unavailable or request is unsupported', 502);
     return jsonOk({ answer, sources: rows.length, model: 'llama-3.1-8b-instruct' });
   } catch (e) {
     return jsonErr('AI request failed: ' + e.message, 500);
