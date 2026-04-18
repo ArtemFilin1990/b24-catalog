@@ -46,7 +46,7 @@ async function readJSON(request) {
 }
 
 async function searchCatalog(query, env) {
-  const clean = String(query || '').replace(/['"`;\\]/g, ' ').trim().slice(0, 100);
+  const clean = String(query || '').trim().slice(0, 100);
   const results = [];
 
   if (!clean) return results;
@@ -62,10 +62,11 @@ async function searchCatalog(query, env) {
     const rs = await env.DB.prepare(
       'SELECT data FROM imported_rows WHERE deleted = 0 AND base_number LIKE ? LIMIT 5'
     ).bind(`%${clean}%`).all();
+    const seen = new Set(results.map(x => x.base_number).filter(Boolean));
     for (const row of rs.results || []) {
       try {
         const d = JSON.parse(row.data);
-        if (!results.find(x => x.base_number === d.designation)) {
+        if (d.designation && !seen.has(d.designation)) {
           results.push({
             brand: d.brand,
             base_number: d.designation,
@@ -73,6 +74,7 @@ async function searchCatalog(query, env) {
             d_outer: d.D,
             width_mm: d.B
           });
+          seen.add(d.designation);
         }
       } catch (e) {}
     }
@@ -112,7 +114,10 @@ async function askAi(question, env) {
       { gateway: { id: 'b24', skipCache: false, cacheTtl: 3600 } }
     );
 
-    const answer = resp?.response || resp?.result?.response || 'Нет ответа от модели';
+    const answer = typeof resp?.response === 'string'
+      ? resp.response
+      : (typeof resp?.result?.response === 'string' ? resp.result.response : null);
+    if (!answer) return jsonErr('AI returned empty response', 502);
     return jsonOk({ answer, sources: rows.length, model: 'llama-3.1-8b-instruct' });
   } catch (e) {
     return jsonErr('AI request failed: ' + e.message, 500);
