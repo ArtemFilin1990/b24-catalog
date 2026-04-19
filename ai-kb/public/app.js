@@ -242,7 +242,7 @@
     setStatus(`Извлекаю текст из ${f.name}…`, 'info');
     try {
       const text = await extractFile(f);
-      textEl.value = text.slice(0, 200000);
+      textEl.value = text.slice(0, 300000);
       setStatus(`Извлечено ${text.length.toLocaleString('ru')} символов. Нажмите «Загрузить в базу».`, 'success');
     } catch (e) {
       setStatus('Ошибка: ' + (e.message || e), 'error');

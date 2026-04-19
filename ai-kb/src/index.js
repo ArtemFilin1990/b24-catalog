@@ -16,8 +16,6 @@ const SSE_HEADERS = {
   'X-Accel-Buffering': 'no',
 };
 
-const ADMIN_TOKEN = 'ewerest-kb-admin-2026';
-
 const CHAT_MODEL = '@cf/meta/llama-3.1-8b-instruct';
 const EMBED_MODEL = '@cf/baai/bge-m3';
 const EMBED_DIMS = 1024;
@@ -28,6 +26,7 @@ const MAX_TOKENS = 900;
 const VECTOR_TOPK = 5;
 const CATALOG_TOPK = 8;
 const CHUNK_CHARS = 1200;
+const MAX_DOC_CHARS = 300000;
 const CHUNK_OVERLAP = 150;
 
 const AI_SYSTEM = `Ты — опытный специалист по подшипникам компании ТД «Эверест» (Вологда).
@@ -48,8 +47,11 @@ function jsonErr(message, status = 400) {
   return new Response(JSON.stringify({ ok: false, error: message }), { status, headers: JSON_HEADERS });
 }
 
-function requireAdmin(request) {
-  return request.headers.get('X-Admin-Token') === ADMIN_TOKEN;
+function requireAdmin(request, env) {
+  const expected = env.ADMIN_TOKEN;
+  if (!expected) return false;
+  const got = request.headers.get('X-Admin-Token');
+  return typeof got === 'string' && got === expected;
 }
 
 function sanitizeMessages(raw) {
@@ -232,13 +234,13 @@ function sliceChunkAt(text, idx) {
 }
 
 async function handleIngest(request, env) {
-  if (!requireAdmin(request)) return jsonErr('Forbidden', 403);
+  if (!requireAdmin(request, env)) return jsonErr('Forbidden', 403);
 
   let body;
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
 
   const title = String(body?.title || '').trim().slice(0, 200);
-  const text = String(body?.text || '').trim();
+  const text = String(body?.text || '').trim().slice(0, MAX_DOC_CHARS);
   const category = String(body?.category || 'docs').slice(0, 50);
   const source = String(body?.source || 'manual').slice(0, 100);
   if (!title || !text) return jsonErr('title and text required');
@@ -248,9 +250,10 @@ async function handleIngest(request, env) {
 
   const ins = await env.DB
     .prepare('INSERT INTO knowledge_base (category, title, content, keywords) VALUES (?, ?, ?, ?)')
-    .bind(category, title, text.slice(0, 100000), source)
+    .bind(category, title, text, source)
     .run();
-  const kbId = ins?.meta?.last_row_id ?? Date.now();
+  const kbId = ins?.meta?.last_row_id;
+  if (!kbId) return jsonErr('Failed to persist document to D1', 500);
 
   const embeddings = await embed(env, chunks);
   const vectors = chunks.map((c, i) => {
@@ -270,10 +273,10 @@ async function handleIngest(request, env) {
   return jsonOk({ chunks: vectors.length, title, kb_id: kbId });
 }
 
-const REINDEX_CHUNKS_PER_CALL = 4;
+const REINDEX_CHUNKS_PER_CALL = 12;
 
 async function handleReindex(request, env) {
-  if (!requireAdmin(request)) return jsonErr('Forbidden', 403);
+  if (!requireAdmin(request, env)) return jsonErr('Forbidden', 403);
   const url = new URL(request.url);
   const afterId = Math.max(0, parseInt(url.searchParams.get('after_id') || '0', 10));
   const chunkFrom = Math.max(0, parseInt(url.searchParams.get('chunk_from') || '0', 10));
