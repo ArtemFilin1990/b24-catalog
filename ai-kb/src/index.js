@@ -118,6 +118,96 @@ function requireAdmin(request, env) {
   return request.headers.get('X-Admin-Token') === expected;
 }
 
+// ============================================================
+// Settings (D1 key-value)
+// ============================================================
+const SETTING_KEYS = new Set([
+  'system_prompt',
+  'temperature',
+  'max_tokens',
+  'catalog_topk',
+  'vector_topk',
+]);
+
+async function ensureSettingsTable(env) {
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))'
+  ).run();
+}
+
+async function getSetting(env, key, fallback) {
+  try {
+    await ensureSettingsTable(env);
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
+    return row?.value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function setSetting(env, key, value) {
+  await ensureSettingsTable(env);
+  await env.DB
+    .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+    .bind(key, value)
+    .run();
+}
+
+async function deleteSetting(env, key) {
+  await ensureSettingsTable(env);
+  await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
+}
+
+async function handleGetSettings(env) {
+  await ensureSettingsTable(env);
+  const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+  const out = {
+    system_prompt: AI_SYSTEM,
+    temperature: String(0.2),
+    max_tokens: String(MAX_TOKENS),
+    catalog_topk: String(CATALOG_TOPK),
+    vector_topk: String(VECTOR_TOPK),
+    _overrides: {},
+  };
+  for (const r of results || []) {
+    if (SETTING_KEYS.has(r.key)) {
+      out[r.key] = r.value;
+      out._overrides[r.key] = { updated_at: r.updated_at };
+    }
+  }
+  return jsonOk({ settings: out });
+}
+
+async function handleSetSettings(request, env) {
+  if (!requireAdmin(request, env)) return jsonErr('Forbidden', 403);
+  let body;
+  try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+  const updates = body?.settings || {};
+
+  const saved = [];
+  const statements = [];
+  for (const [k, v] of Object.entries(updates)) {
+    if (!SETTING_KEYS.has(k)) continue;
+    if (v == null || String(v).trim() === '') {
+      statements.push(env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(k));
+      saved.push({ key: k, cleared: true });
+    } else {
+      const val = String(v).slice(0, 60000);
+      statements.push(
+        env.DB
+          .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+          .bind(k, val)
+      );
+      saved.push({ key: k, updated: true });
+    }
+  }
+  if (statements.length) {
+    await ensureSettingsTable(env);
+    await env.DB.batch(statements);
+  }
+  return jsonOk({ saved });
+}
+
 function sanitizeMessages(raw) {
   if (!Array.isArray(raw)) return null;
   return raw.slice(-MAX_HISTORY).reduce((acc, m) => {
@@ -312,9 +402,29 @@ async function handleChat(request, env) {
   const t0 = Date.now();
   const searchQuery = lastUser.content;
 
+  // Pull all overrides in a single D1 query. Use ?? so explicit 0 values
+  // (e.g. catalog_topk=0 to disable the catalog leg) aren't swallowed by ||.
+  let sRows = [];
+  try {
+    await ensureSettingsTable(env);
+    const res = await env.DB.prepare('SELECT key, value FROM settings').all();
+    sRows = res.results || [];
+  } catch { /* settings table unreachable — fall back to constants */ }
+  const sMap = Object.fromEntries(sRows.map(r => [r.key, r.value]));
+
+  const sysPrompt   = sMap.system_prompt || AI_SYSTEM;
+  const tempNum     = parseFloat(sMap.temperature ?? '0.2');
+  const temperature = Math.max(0, Math.min(1.5, Number.isFinite(tempNum) ? tempNum : 0.2));
+  const maxTokNum   = parseInt(sMap.max_tokens ?? MAX_TOKENS, 10);
+  const maxTokens   = Math.max(64, Math.min(2000, Number.isFinite(maxTokNum) ? maxTokNum : MAX_TOKENS));
+  const catalogNum  = parseInt(sMap.catalog_topk ?? CATALOG_TOPK, 10);
+  const catalogTopK = Math.max(0, Math.min(20, Number.isFinite(catalogNum) ? catalogNum : CATALOG_TOPK));
+  const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
+  const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
+
   const [catalogRows, kbMatches] = await Promise.all([
-    searchCatalog(env, searchQuery).catch(() => []),
-    searchKnowledge(env, searchQuery).catch(() => []),
+    catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
+    vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
@@ -331,7 +441,7 @@ async function handleChat(request, env) {
   parts.push('Вопрос: ' + searchQuery);
 
   const aiMessages = [
-    { role: 'system', content: AI_SYSTEM },
+    { role: 'system', content: sysPrompt },
     ...messages.slice(0, -1),
     { role: 'user', content: parts.join('\n\n') },
   ];
@@ -342,8 +452,8 @@ async function handleChat(request, env) {
   try {
     stream = await env.AI.run(CHAT_MODEL, {
       messages: aiMessages,
-      max_tokens: MAX_TOKENS,
-      temperature: 0.2,
+      max_tokens: maxTokens,
+      temperature,
       stream: true,
     });
   } catch (e) {
@@ -614,6 +724,10 @@ export default {
     if (path === '/api/reindex'&& method === 'POST') return handleReindex(request, env);
     if (path === '/api/stats'  && method === 'GET')  return handleStats(env);
     if (path === '/api/health' && method === 'GET')  return jsonOk({ model: CHAT_MODEL, embed: EMBED_MODEL });
+
+    // Settings (admin-editable bot prompt + tuning params)
+    if (path === '/api/settings' && method === 'GET')  return handleGetSettings(env);
+    if (path === '/api/settings' && method === 'POST') return handleSetSettings(request, env);
 
     // Sessions + messages
     if (path === '/api/sessions' || path.startsWith('/api/sessions/')) return handleSessions(request, env);
