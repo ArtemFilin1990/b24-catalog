@@ -55,20 +55,23 @@ jobs:
         if: steps.check.outputs.redeploy == 'true'
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          ACC: '84cbacc4816c29c294101ec57a0bea5d'
         run: |
           set -e
           if [[ -z "$CF_API_TOKEN" ]]; then
             echo "::error::CF_API_TOKEN secret is not set in this repository"
             exit 1
           fi
-          verify=$(curl -s "https://api.cloudflare.com/client/v4/user/tokens/verify" -H "Authorization: Bearer $CF_API_TOKEN")
+          # Account-scoped tokens fail /user/tokens/verify with code 1000
+          # even when valid; use the account-scoped endpoint instead.
+          verify=$(curl -s "https://api.cloudflare.com/client/v4/accounts/$ACC/tokens/verify" -H "Authorization: Bearer $CF_API_TOKEN")
           echo "Token verify: $verify"
-          echo "$verify" | grep -q '"success":true' || { echo "::error::CF_API_TOKEN invalid"; exit 1; }
+          echo "$verify" | grep -q '"success":true' || { echo "::error::CF_API_TOKEN is invalid or not scoped to account $ACC"; exit 1; }
           # Touch the ai-kb service to fail fast if the token lacks
           # Workers Scripts:Read/Edit on this account.
-          ai=$(curl -s "https://api.cloudflare.com/client/v4/accounts/84cbacc4816c29c294101ec57a0bea5d/workers/services/ai-kb/environments/production" -H "Authorization: Bearer $CF_API_TOKEN")
+          ai=$(curl -s "https://api.cloudflare.com/client/v4/accounts/$ACC/workers/services/ai-kb/environments/production" -H "Authorization: Bearer $CF_API_TOKEN")
           if echo "$ai" | grep -q '"code":10000'; then
-            echo "::error::CF_API_TOKEN lacks Workers Scripts edit permission on account 84cbacc4816c29c294101ec57a0bea5d. Recreate the token with permissions: Workers Scripts:Edit, Workers AI:Edit, D1:Edit, R2:Edit, Vectorize:Edit, Account Settings:Read."
+            echo "::error::CF_API_TOKEN lacks Workers Scripts edit permission on account $ACC. Recreate the token with permissions: Workers Scripts:Edit, Workers AI:Edit, D1:Edit, R2:Edit, Vectorize:Edit, Account Settings:Read."
             exit 1
           fi
 
