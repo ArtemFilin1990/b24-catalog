@@ -19,7 +19,11 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Дефолты — INSERT OR IGNORE не трогает существующие override'ы оператора.
--- Список ключей синхронизирован с SETTING_KEYS в ai-kb/src/index.js.
+-- Это подмножество SETTING_KEYS из ai-kb/src/index.js: numeric runtime
+-- параметры. Ключ system_prompt здесь намеренно НЕ затрагивается —
+-- его дефолтом служит компил-таймовая константа AI_SYSTEM в коде,
+-- так что админ видит «реальный» промпт и сравнивает с override'ом
+-- через ответ /api/settings.
 INSERT OR IGNORE INTO settings (key, value) VALUES
   ('temperature',  '0.2'),
   ('max_tokens',   '900'),

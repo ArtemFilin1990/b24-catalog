@@ -49,14 +49,13 @@ export async function findAnalogsByDimensions(db, d_inner, d_outer, width, exclu
     sql += ' AND base_number != ?';
     params.push(excludeBaseNumber);
   }
-  sql += ' ORDER BY (qty > 0) DESC, COALESCE(price_rub, 0) ASC LIMIT ?';
+  // Rank: in-stock first, then known-priced first (so rows with no price
+  // sink to the bottom — price=0 here means "unknown", not "free"),
+  // then cheapest. Errors bubble up; the caller's .catch already isolates.
+  sql += ' ORDER BY (qty > 0) DESC, (price_rub > 0) DESC, price_rub ASC LIMIT ?';
   params.push(limit);
-  try {
-    const { results } = await db.prepare(sql).bind(...params).all();
-    return results || [];
-  } catch {
-    return [];
-  }
+  const { results } = await db.prepare(sql).bind(...params).all();
+  return results || [];
 }
 
 /**

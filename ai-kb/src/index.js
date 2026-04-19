@@ -163,20 +163,20 @@ async function getSetting(env, key, fallback) {
   }
 }
 
-async function setSetting(env, key, value) {
-  await env.DB
-    .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
-    .bind(key, value)
-    .run();
-}
-
-async function deleteSetting(env, key) {
-  await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
-}
+// setSetting/deleteSetting helpers removed — handleSetSettings inlines
+// the same SQL via env.DB.batch(). Restore them here only if a second
+// call site appears.
 
 async function handleGetSettings(env) {
-
-  const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+  // Fall back to compile-time defaults if the settings table is missing
+  // (migration 0005 not applied yet) or D1 is briefly unreachable. Match
+  // what getSetting() does on hot chat path so /api/settings can't be
+  // the only thing that 500s while chat keeps working.
+  let results = [];
+  try {
+    const res = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+    results = res.results || [];
+  } catch { /* fall through with defaults */ }
   const out = {
     system_prompt: AI_SYSTEM,
     temperature: String(0.2),
@@ -484,13 +484,13 @@ async function handleChat(request, env) {
       stream: true,
     });
   } catch (e) {
-    await logQuery(env, sessionId, searchQuery, 0, catalogRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, e?.message);
+    await logQuery(env, sessionId, searchQuery, 0, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, e?.message);
     return jsonErr(`AI error: ${e?.message || e}`, 502);
   }
 
   // Перехватываем поток для записи в историю
   const [streamA, streamB] = stream.tee();
-  const sources = catalogRows.length + kbMatches.length;
+  const sources = catalogRows.length + kbMatches.length + geoRows.length;
 
   // Асинхронно собираем ответ и пишем в D1
   (async () => {
@@ -511,7 +511,11 @@ async function handleChat(request, env) {
         }
       }
       await saveMessages(env, sessionId, searchQuery, full, sources);
-      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
+      // Roll geo-hits into the catalog count for query_log: the table has
+      // sourcesCat/sourcesKb columns only, and geo IS catalog data
+      // (just selected by exact dimension match). The precise per-leg
+      // breakdown still ships in the X-Sources-* response headers.
+      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
     } catch { /* не критично */ }
   })();
 
