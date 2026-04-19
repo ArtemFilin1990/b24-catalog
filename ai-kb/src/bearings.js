@@ -42,36 +42,47 @@ export function extractDimensions(query) {
 export function extractBearingTypeHint(query) {
   if (!query) return null;
   const s = String(query).toUpperCase();
-  // Cylindrical roller letter prefixes — most specific, check first.
-  const rollerLetter = s.match(/\b(NUP|NJP|NUJ|NUP|NU|NJ|NF|NP|N)\b/);
+  // Cylindrical roller letter prefixes — letters followed by digits.
+  // \b doesn't fire between letter and digit (both are word chars), so
+  // use a lookahead at a digit instead. Order longest-first so NUP wins
+  // over NU. Final \b matches the start of the part number.
+  const rollerLetter = s.match(/\b(NUP|NJP|NUJ|NF|NP|NU|NJ|N)(?=\d)/);
   if (rollerLetter) return rollerLetter[1];
-  // 5-digit ISO conical/spherical roller series (30xxx, 31xxx, 32xxx,
-  // 22xxx, 23xxx). Check before 4-digit ball series.
+  // 5-digit ISO conical/spherical roller (30xxx, 31xxx, 32xxx, 22xxx, 23xxx).
   const fiveDigit = s.match(/\b(30|31|32|22|23)\d{3}\b/);
   if (fiveDigit) return fiveDigit[1] + 'xxx';
-  // ISO 4-digit ball series (60xx, 62xx, 63xx, 64xx, 70xx, 72xx, 73xx).
+  // ISO 4-digit ball series (60xx, 62xx, 63xx, 64xx, 70xx, 72xx, 73xx, 16xx).
   const fourBall = s.match(/\b(60|62|63|64|70|72|73|16)\d{2}\b/);
   if (fourBall) return fourBall[1] + 'xx';
-  // GOST 4-digit tapered roller (7xxx, 8xxx start).
+  // GOST 4-digit tapered roller (7xxx, 8xxx).
   const gostNumeric = s.match(/\b([78])\d{3}\b/);
   if (gostNumeric) return gostNumeric[1] + 'xxx';
   return null;
 }
 
 function typeFilterClause(typeHint) {
-  // Translate the canonical hint into a SQL fragment. Filters BOTH
-  // catalog.type (text label) and catalog.base_number (when type is
-  // missing data, the prefix still constrains).
   if (!typeHint) return null;
+  // Letter prefixes (NU, NJ, NUP…) — GLOB on base_number prefix.
   if (/^[A-Z]+$/.test(typeHint)) {
-    // Roller letter prefix like "NU" — match base_number prefix.
     return { sql: 'AND base_number GLOB ?', param: typeHint + '*' };
   }
-  if (typeHint.endsWith('xxx')) {
-    return { sql: 'AND base_number GLOB ?', param: typeHint.slice(0, 2) + '???*' };
-  }
-  if (typeHint.endsWith('xx')) {
-    return { sql: 'AND base_number GLOB ?', param: typeHint.slice(0, 2) + '??*' };
+  // Numeric hint shaped like "<digits>x...": strip every 'x' to get the
+  // exact numeric prefix, then pad with as many GLOB '?' as there were
+  // 'x's. Examples:
+  //   '6xx'  → prefix '6',  4 chars total → '6??*'  (wait — 6xx = 3 chars
+  //                                                  total → must produce
+  //                                                  4-digit numbers like
+  //                                                  6204; pattern '6???*'
+  //                                                  is wrong. Correct
+  //                                                  pattern: prefix + ?? + *)
+  //   '60xx' → '60??*' (matches 6004, 6005…)
+  //   '32xxx'→ '32???*' (matches 32205, 32310…)
+  //   '8xxx' → '8???*' (matches 8205, 8211…)
+  // Rule: for every 'x' in the hint, append one '?'.
+  const xCount = (typeHint.match(/x/gi) || []).length;
+  if (xCount > 0) {
+    const prefix = typeHint.replace(/x/gi, '');
+    return { sql: 'AND base_number GLOB ?', param: prefix + '?'.repeat(xCount) + '*' };
   }
   return null;
 }
