@@ -12,6 +12,11 @@ on:
     paths:
       - 'ai-kb/**'
       - '.github/workflows/deploy-ai-kb.yml'
+  schedule:
+    # Heal every 15 min — Cloudflare's native Git integration keeps
+    # clobbering ai-kb with the root b24-catalog bundle on unrelated
+    # pushes to main, so we re-assert the correct deploy periodically.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -29,11 +34,24 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Check current deploy and decide if redeploy needed
+        id: check
+        run: |
+          title=$(curl -sf https://ai-kb.35ewerest.workers.dev/ | grep -oE '<title>[^<]+</title>' | head -1 || true)
+          echo "current title: $title"
+          if [[ "$title" == '<title>Бот Эверест</title>' && "${{ github.event_name }}" == 'schedule' ]]; then
+            echo "redeploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "redeploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Wait for Cloudflare native CI to finish
+        if: steps.check.outputs.redeploy == 'true' && github.event_name == 'push'
         # Native CI usually wraps up within 60–90s after push; pad to 150s.
         run: sleep 150
 
       - name: Deploy via Wrangler from ai-kb/
+        if: steps.check.outputs.redeploy == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -41,6 +59,7 @@ jobs:
           workingDirectory: 'ai-kb'
 
       - name: Smoke check
+        if: steps.check.outputs.redeploy == 'true'
         run: |
           sleep 8
           body=$(curl -sf https://ai-kb.35ewerest.workers.dev/api/health)
