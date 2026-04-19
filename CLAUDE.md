@@ -80,6 +80,8 @@ If you touch this workflow, keep the retry loop and pin `wrangler@4.83.0` in the
 
 `GET /api/imports` stays public (it's the catalog feed consumed by `public/index.html`); everything else that touches PII (orders, sessions, imports write) is admin-gated. The inline `<script id="ev-d1-sync">` in `public/index.html` has an `adminFetch` helper that prompts for the token (stored in `sessionStorage`, key `ev_admin_token`) and retries once on 401 — keep that pattern when adding new admin-only calls from the frontend.
 
+**ai-kb has its own `requireAdmin`.** `ai-kb/src/index.js` ships a simpler variant (lines ~115–119): `X-Admin-Token` header only, plain `===` compare, no `Bearer` support, no `safeEqual`. Both workers read `env.ADMIN_TOKEN`, but the tokens are stored as separate secrets per worker. If you add a new admin-gated ai-kb route, use the existing `requireAdmin(request, env)` in that file; do **not** import or mirror the root-worker helper (the two workers deploy independently).
+
 ## ai-kb architecture
 
 Single-file `ai-kb/src/index.js` (~740 lines). Request flow:
