@@ -218,8 +218,23 @@ async function handleSetSettings(request, env) {
     }
   }
   if (statements.length) {
-
-    await env.DB.batch(statements);
+    try {
+      await env.DB.batch(statements);
+    } catch (e) {
+      // Self-heal: on a fresh/staging D1 where 0005_settings hasn't been
+      // applied yet, the table is missing. Create it lazily this ONE time
+      // and replay the batch. Reads use getSetting()'s try/catch fallback
+      // to defaults, but writes must actually persist — returning 500
+      // here would silently break the admin panel.
+      if (String(e?.message || '').includes('no such table')) {
+        await env.DB
+          .prepare('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))')
+          .run();
+        await env.DB.batch(statements);
+      } else {
+        throw e;
+      }
+    }
   }
   return jsonOk({ saved });
 }

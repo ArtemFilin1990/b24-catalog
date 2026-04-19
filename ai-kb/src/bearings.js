@@ -49,6 +49,14 @@ export function extractBearingTypeHint(query) {
   const rollerLetter = s.match(/\b(NUP|NJP|NUJ|NF|NP|NU|NJ|N)(?=\d)/);
   if (rollerLetter) return rollerLetter[1];
 
+  // Explicit GOST qualifier flips the parse for numbers 7xxx/8xxx
+  // (ambiguous between GOST tapered-roller/upor and ISO angular-ball).
+  // If the query says "ГОСТ 7205", we must classify as tapered roller,
+  // NOT ISO 72xx ball.
+  // Cyrillic letters aren't word chars in default JS regex, so \b
+  // around ГОСТ doesn't fire — use a plain substring check.
+  const isGost = s.includes('ГОСТ') || /\bGOST\b/.test(s);
+
   // GOST 6-digit catalog codes (most specific, check before 5/4-digit).
   //   180xxx → 6xxx-2RS         ball (radial, two rubber seals)
   //   80xxx  → 6xxxZZ           ball (radial, two metal shields)
@@ -61,11 +69,18 @@ export function extractBearingTypeHint(query) {
   //   36xxxx → 7xxxC            angular-contact ball
   //   46xxxx → 7xxxAC           angular-contact ball
   //   66xxxx → 7xxxB            angular-contact ball
-  // We tag with the equivalent ISO hint already known to typeLabelsFor.
   if (/\b180\d{3}\b/.test(s) || /\b80\d{3}\b/.test(s) ||
       /\b60\d{3}\b/.test(s) || /\b50\d{3}\b/.test(s)) return '62XX';
   if (/\b36\d{4}\b/.test(s) || /\b46\d{4}\b/.test(s) || /\b66\d{4}\b/.test(s)) return '72XX';
   if (/\b32\d{4}\b/.test(s) || /\b42\d{4}\b/.test(s) || /\b12\d{4}\b/.test(s)) return 'NU';
+
+  // GOST-qualified 4-digit takes priority over ISO 4-digit when the
+  // leading digit is 7 (tapered roller) or 8 (thrust). Without the
+  // qualifier we fall through to the generic ISO-first ordering below.
+  if (isGost) {
+    const gostFirst = s.match(/\b([78])\d{3}\b/);
+    if (gostFirst) return gostFirst[1] + 'xxx';
+  }
 
   // 5-digit ISO conical/spherical roller (30xxx, 31xxx, 32xxx, 22xxx, 23xxx).
   const fiveDigit = s.match(/\b(30|31|32|22|23)\d{3}\b/);
