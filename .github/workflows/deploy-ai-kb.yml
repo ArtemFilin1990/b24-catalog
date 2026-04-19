@@ -1,21 +1,50 @@
 name: Deploy ai-kb to Cloudflare Workers
 
+# Cloudflare's native Git integration also builds the ai-kb worker but
+# picks up the wrong entry point (the root b24-catalog wrangler.toml
+# and assets), which overwrites this worker with the catalog UI.
+# This workflow intentionally runs AFTER the native CI finishes and
+# restores the correct ai-kb code & assets from the subdirectory.
+
 on:
   push:
     branches: [main]
     paths:
       - 'ai-kb/**'
+      - '.github/workflows/deploy-ai-kb.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ai-kb-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Deploy AI Knowledge Base
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Deploy via Wrangler
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Wait for Cloudflare native CI to finish
+        # Native CI usually wraps up within 60–90s after push; pad to 150s.
+        run: sleep 150
+
+      - name: Deploy via Wrangler from ai-kb/
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: 84cbacc4816c29c294101ec57a0bea5d
           workingDirectory: 'ai-kb'
+
+      - name: Smoke check
+        run: |
+          sleep 8
+          body=$(curl -sf https://ai-kb.35ewerest.workers.dev/api/health)
+          echo "$body"
+          echo "$body" | grep -q 'llama-3.3-70b' || { echo "::error::health did not report llama-3.3-70b"; exit 1; }
+          html=$(curl -sf https://ai-kb.35ewerest.workers.dev/)
+          echo "$html" | grep -q '<title>Бот Эверест</title>' || { echo "::error::root did not return Бот Эверест"; exit 1; }
