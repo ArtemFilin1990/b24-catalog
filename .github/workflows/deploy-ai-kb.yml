@@ -87,49 +87,66 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: 84cbacc4816c29c294101ec57a0bea5d
           EXPECTED_TITLE: '<title>Бот Эверест</title>'
         run: |
-          set -e
-          # Cloudflare's native Git integration triggers its own build
-          # on every push and that build finishes somewhere between
-          # 1.5 and 5 minutes in. We deploy, wait, verify, and redeploy
-          # until our build stays. Up to 6 attempts with growing waits.
+          set -eo pipefail
+          # Safety net against any straggler Cloudflare auto-deploy: deploy,
+          # wait, verify, and redeploy if the title isn't ours. Backoff is
+          # 30/60/90/120/150/180s (covers up to the ~5-min native CI window
+          # plus a long stability tail).
           attempt=0
           max_attempts=6
           stable=false
+          fetch_title() {
+            # Wrap curl in a helper that distinguishes real failures from
+            # "deploy is wrong". Return: 0 if fetched, 1 if curl failed.
+            local out
+            if out=$(curl -sf --max-time 15 https://ai-kb.35ewerest.workers.dev/); then
+              echo "$out" | grep -oE '<title>[^<]+</title>' | head -1
+              return 0
+            fi
+            return 1
+          }
+
           while [ "$attempt" -lt "$max_attempts" ]; do
             attempt=$((attempt+1))
             echo "::group::Attempt $attempt — wrangler deploy"
             wrangler deploy
             echo "::endgroup::"
 
-            # Wait for CF edge to propagate AND for any native CI that's
-            # still running to finish overwriting us.
-            settle=$((30 + attempt * 30))
+            settle=$((attempt * 30))
             echo "settling for ${settle}s before verify"
             sleep "$settle"
 
-            title=$(curl -sf https://ai-kb.35ewerest.workers.dev/ 2>/dev/null | grep -oE '<title>[^<]+</title>' | head -1 || true)
+            if ! title=$(fetch_title); then
+              echo "curl failed during post-settle verify — retrying deploy after a short backoff"
+              sleep 15
+              continue
+            fi
             echo "post-settle title: $title"
             if [[ "$title" != "$EXPECTED_TITLE" ]]; then
-              echo "worker was overwritten by native CI, retrying…"
+              echo "worker was overwritten, redeploying…"
               continue
             fi
 
-            # Double-check: wait another 60s to ensure the deploy sticks.
-            sleep 60
-            title2=$(curl -sf https://ai-kb.35ewerest.workers.dev/ 2>/dev/null | grep -oE '<title>[^<]+</title>' | head -1 || true)
+            # Stability re-check: wait another 120s (longer than any observed
+            # clobber window) to confirm the deploy sticks.
+            sleep 120
+            if ! title2=$(fetch_title); then
+              echo "curl failed during stability check — treat as unstable, redeploy"
+              continue
+            fi
             echo "stability check title: $title2"
             if [[ "$title2" == "$EXPECTED_TITLE" ]]; then
               stable=true
               break
             fi
-            echo "deploy didn't stick after 60s, retrying…"
+            echo "deploy didn't stick after 120s, retrying…"
           done
 
           if [[ "$stable" != "true" ]]; then
-            echo "::error::Could not win the race against Cloudflare native CI after $max_attempts attempts"
+            echo "::error::Could not win the race after $max_attempts attempts"
             exit 1
           fi
-          echo "ai-kb is stable after $attempt attempts"
+          echo "ai-kb is stable after $attempt attempt(s)"
 
       - name: Final smoke check (api/health)
         if: steps.check.outputs.redeploy == 'true'
