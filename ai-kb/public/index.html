@@ -3,48 +3,70 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#ffffff" />
+  <meta name="theme-color" content="#f5f1ea" />
   <title>AI KB — ТД Эверест</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="app-header">
-    <div class="brand">
-      <div class="brand-title">AI Knowledge Base</div>
-      <div class="brand-sub">ТД «Эверест» — подшипники</div>
+    <div class="app-header-inner">
+      <div class="brand">
+        <div class="brand-title">AI KB</div>
+        <div class="brand-sub">ТД «Эверест» — подшипники</div>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="chat" type="button" role="tab">Чат</button>
+        <button class="tab" data-tab="upload" type="button" role="tab">База знаний</button>
+      </nav>
+      <div class="stats" id="stats" title="Состояние базы">…</div>
     </div>
-    <nav class="tabs">
-      <button class="tab active" data-tab="chat">Чат</button>
-      <button class="tab" data-tab="upload">База знаний</button>
-    </nav>
-    <div class="stats" id="stats" title="Состояние базы">...</div>
   </header>
 
   <main id="view-chat" class="view active">
-    <div id="chat" class="chat" aria-live="polite"></div>
+    <div class="chat-shell" id="chat" aria-live="polite"></div>
+
     <div class="composer">
-      <form id="form" class="form">
-        <textarea
-          id="input"
-          class="input"
-          rows="1"
-          placeholder="Напишите вопрос… (Enter — отправить, Shift+Enter — перенос)"
-          autocomplete="off"
-          required
-        ></textarea>
-        <button id="send" class="send-btn" type="submit">Отправить</button>
-      </form>
-      <div class="composer-row">
-        <button id="clear-btn" type="button" class="link-btn">Очистить чат</button>
-        <div class="hint">RAG по каталогу (FTS) + базе знаний (Vectorize). История — только в памяти.</div>
+      <div class="composer-inner">
+        <div class="attached-list" id="attached-list"></div>
+
+        <form id="form" class="form">
+          <button id="attach-btn" type="button" class="icon-btn" title="Прикрепить файл или медиа" aria-label="Прикрепить">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.58 8.58a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <input id="attach-input" type="file" multiple hidden />
+
+          <textarea
+            id="input"
+            class="input"
+            rows="1"
+            placeholder="Спросите про подшипник — подбор, аналог, расшифровку…"
+            autocomplete="off"
+          ></textarea>
+
+          <button id="send" type="submit" class="send-btn" title="Отправить" aria-label="Отправить">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M13 6l6 6-6 6"/>
+            </svg>
+          </button>
+        </form>
+
+        <div class="composer-meta">
+          <button id="clear-btn" type="button" class="link-btn">Очистить чат</button>
+          <span>Enter — отправить · Shift+Enter — перенос · скрепка — файл/медиа</span>
+        </div>
       </div>
     </div>
   </main>
 
   <main id="view-upload" class="view">
-    <section class="upload-box">
-      <h2>Добавить документ в базу знаний</h2>
-      <p class="muted">Поддержка: PDF, DOCX, TXT, MD. Текст извлекается в браузере, затем чанкуется и индексируется в Vectorize.</p>
+    <section class="upload-shell">
+      <h2>База знаний</h2>
+      <p class="muted">Загрузите документ в любом формате. Поддерживается извлечение текста из PDF и DOCX в браузере; остальные форматы принимаются как plain text. После индексации чат будет использовать эти данные в ответах.</p>
 
       <label class="field">
         <span>Заголовок</span>
@@ -67,15 +89,17 @@
         <input id="admin-token" type="password" placeholder="X-Admin-Token" autocomplete="current-password" />
       </label>
 
-      <label class="field">
-        <span>Файл или текст</span>
-        <input id="doc-file" type="file" accept=".pdf,.docx,.txt,.md,text/plain" />
-        <textarea id="doc-text" rows="8" placeholder="…или вставьте текст вручную"></textarea>
-      </label>
+      <div class="field">
+        <span>Файл</span>
+        <div class="file-drop">
+          <input id="doc-file" type="file" />
+        </div>
+        <textarea id="doc-text" rows="10" placeholder="…или вставьте текст вручную"></textarea>
+      </div>
 
       <div class="upload-actions">
-        <button id="upload-btn" type="button" class="send-btn">Загрузить в базу</button>
-        <button id="reindex-btn" type="button" class="link-btn" title="Перестроить Vectorize по всем записям knowledge_base">Переиндексировать всю базу</button>
+        <button id="upload-btn" type="button" class="primary-btn">Загрузить в базу</button>
+        <button id="reindex-btn" type="button" class="ghost-btn" title="Переиндексировать все записи knowledge_base">Переиндексировать</button>
       </div>
 
       <div id="upload-status" class="upload-status" hidden></div>
