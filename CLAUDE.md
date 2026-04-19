@@ -11,8 +11,9 @@ Prefer the local skills in `.claude/skills/` before generic reasoning when the t
 - `.claude/skills/catalog-import-review` — review catalog import/staging/view logic, normalized rows, duplicate prevention, and migration bootstrap safety.
 - `.claude/skills/cloudflare-worker-review` — review Worker routes, secrets, bindings, deploy flow, Cloudflare-specific risks, and admin/auth hardening.
 - `.claude/skills/d1-migration-safety` — review D1 migration bootstrap safety, upgrade safety, helper-table dependencies, id/view collisions, and clean-db behavior.
+- `.claude/skills/ai-kb-chatbot-build` — build, extend, or fix the Everest AI chatbot (`ai-kb` worker) with D1 memory, Vectorize RAG, R2 documents, and bearing analog logic.
 
-When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
+When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, catalog read models, or building/extending the Everest chatbot, load and follow the matching local skill first.
 
 ## Donor reference packs
 
