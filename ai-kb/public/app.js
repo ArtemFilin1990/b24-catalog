@@ -70,6 +70,76 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderInline(s) {
+    return escapeHtml(s)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+?)`/g, '<code>$1</code>');
+  }
+
+  // Minimal markdown renderer for chat responses: pipe tables, bullets,
+  // inline emphasis, preserved line breaks. No external library.
+  function renderMarkdown(md) {
+    if (!md) return '';
+    const lines = md.replace(/\r/g, '').split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Table block: at least header + separator
+      if (line.trim().startsWith('|') && i + 1 < lines.length &&
+          /^\s*\|?\s*:?-+/.test(lines[i + 1])) {
+        const header = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          const row = lines[i].trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+          rows.push(row);
+          i++;
+        }
+        let html = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+        for (const h of header) html += `<th>${renderInline(h)}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const row of rows) {
+          html += '<tr>';
+          for (let k = 0; k < header.length; k++) html += `<td>${renderInline(row[k] ?? '')}</td>`;
+          html += '</tr>';
+        }
+        html += '</tbody></table></div>';
+        out.push(html);
+        continue;
+      }
+
+      // Bullet list
+      if (/^\s*[-•]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-•]\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*[-•]\s+/, ''));
+          i++;
+        }
+        out.push('<ul class="md-list">' + items.map(x => `<li>${renderInline(x)}</li>`).join('') + '</ul>');
+        continue;
+      }
+
+      // Blank line / paragraph break
+      if (!line.trim()) { out.push(''); i++; continue; }
+
+      // Default: paragraph line
+      out.push(`<p class="md-p">${renderInline(line)}</p>`);
+      i++;
+    }
+    return out.join('');
+  }
+
   // ---------- Chat ----------
   const chatEl = $('#chat');
   const formEl = $('#form');
@@ -329,7 +399,11 @@
       }
 
       cursor.remove();
-      botEl.textContent = botText || '(пустой ответ)';
+      if (botText) {
+        botEl.innerHTML = renderMarkdown(botText);
+      } else {
+        botEl.textContent = '(пустой ответ)';
+      }
       messages.push({ role: 'assistant', content: botText });
     } catch (e) {
       cursor.remove();
@@ -429,6 +503,28 @@
     }
   });
 
+  async function reindexCall(afterId, chunkFrom, token) {
+    const r = await fetch(`/api/reindex?after_id=${afterId}&chunk_from=${chunkFrom}`, {
+      method: 'POST',
+      headers: { 'X-Admin-Token': token },
+    });
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      const txt = await r.text().catch(() => '');
+      const snippet = txt.replace(/<[^>]+>/g, ' ').trim().slice(0, 160);
+      const err = new Error(`HTTP ${r.status} ${r.statusText || ''} ${snippet}`.trim());
+      err.status = r.status;
+      throw err;
+    }
+    const j = await r.json();
+    if (!j.ok) {
+      const err = new Error(j.error || `HTTP ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    return j;
+  }
+
   reindexBtn.addEventListener('click', async () => {
     const token = tokenEl.value.trim();
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
@@ -439,15 +535,40 @@
     let chunkFrom = 0;
     let totalChunks = 0;
     let rowsDone = 0;
+    const RETRY_DELAYS = [1500, 3000, 6000];
+
     try {
-      while (true) {
-        setStatus(`Переиндексирую: обработано ${rowsDone} записей, ${totalChunks} фрагментов…`, 'info');
-        const r = await fetch(`/api/reindex?after_id=${afterId}&chunk_from=${chunkFrom}`, {
-          method: 'POST',
-          headers: { 'X-Admin-Token': token },
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      outer: while (true) {
+        setStatus(`Переиндексирую: записей обработано ${rowsDone}, фрагментов ${totalChunks}…`, 'info');
+        let j;
+        let lastErr;
+        for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+          try {
+            j = await reindexCall(afterId, chunkFrom, token);
+            break;
+          } catch (e) {
+            lastErr = e;
+            const transient = !e.status || e.status >= 500 || e.status === 429;
+            if (!transient || attempt === RETRY_DELAYS.length) break;
+            const delay = RETRY_DELAYS[attempt];
+            setStatus(`Временная ошибка (${e.message?.slice(0, 120)}), повтор через ${delay / 1000}с…`, 'info');
+            await new Promise(r => setTimeout(r, delay));
+          }
+        }
+        if (!j) {
+          // Skip this chunk window to make forward progress instead of
+          // getting stuck on one bad record.
+          setStatus(`Пропускаю проблемный фрагмент (after_id=${afterId}, chunk_from=${chunkFrom}): ${lastErr?.message || 'неизвестная ошибка'}`, 'error');
+          await new Promise(r => setTimeout(r, 1200));
+          if (chunkFrom > 0) {
+            // skip rest of current row
+            chunkFrom = 0;
+          } else {
+            // couldn't even start this row, advance past it
+            afterId += 1;
+          }
+          continue outer;
+        }
         totalChunks += j.indexed || 0;
         if (j.done) break;
         if (j.row_done) rowsDone++;
