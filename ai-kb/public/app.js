@@ -441,10 +441,20 @@
       });
 
       if (!resp.ok) {
-        const errTxt = await resp.text().catch(() => `HTTP ${resp.status}`);
-        throw new Error(errTxt.slice(0, 200));
+        const rawBody = await resp.text().catch(() => '');
+        let detail = rawBody.trim();
+        try {
+          const j = JSON.parse(detail);
+          if (j && typeof j.error === 'string') detail = j.error;
+        } catch {}
+        const statusLabel = `HTTP ${resp.status}${resp.statusText ? ' ' + resp.statusText : ''}`;
+        const hint = resp.status === 404
+          ? ' — маршрут /api/chat не найден на сервере (проверьте деплой воркера)'
+          : '';
+        const msg = (detail || statusLabel) + hint;
+        throw new Error(msg.slice(0, 240));
       }
-      if (!resp.body) throw new Error('Пустой ответ');
+      if (!resp.body) throw new Error('Пустой ответ от сервера');
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -482,7 +492,9 @@
     } catch (e) {
       cursor.remove();
       botEl.parentElement?.remove();
-      appendBotMsg(`Ошибка: ${e.message || e}`, { error: true });
+      const raw = (e && (e.message || String(e))) || '';
+      const detail = raw.trim() || 'не удалось получить ответ от бота';
+      appendBotMsg(`Ошибка: ${detail}`, { error: true });
       messages.pop();
     } finally {
       setStreaming(false);

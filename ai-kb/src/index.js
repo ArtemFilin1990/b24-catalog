@@ -566,6 +566,10 @@ export default {
       return jsonOk({ model: CHAT_MODEL, embed: EMBED_MODEL });
     }
 
+    if (url.pathname.startsWith('/api/')) {
+      return jsonErr(`Unknown route ${request.method} ${url.pathname}`, 404);
+    }
+
     return env.ASSETS.fetch(request);
   },
 };
