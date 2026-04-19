@@ -4,7 +4,7 @@
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Upload-Token',
   'Cache-Control': 'no-store, no-cache, must-revalidate',
 };
 
@@ -40,6 +40,51 @@ function jsonErr(message, status = 400) {
 
 async function readJSON(request) {
   try { return await request.json(); } catch (e) { return null; }
+}
+
+// ============================================================
+// Admin auth + audit
+// ============================================================
+// Constant-time string compare so a timing oracle can't leak the token.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Gate admin endpoints behind env.ADMIN_TOKEN. Falls back to
+// env.ADMIN_UPLOAD_TOKEN when caller sends X-Upload-Token (legacy).
+function requireAdmin(request, env) {
+  const admin = env.ADMIN_TOKEN;
+  const upload = env.ADMIN_UPLOAD_TOKEN;
+  if (!admin && !upload) return false;
+  const gotAdmin = request.headers.get('X-Admin-Token') || '';
+  const gotUpload = request.headers.get('X-Upload-Token') || '';
+  if (admin && safeEqual(gotAdmin, admin)) return true;
+  if (upload && safeEqual(gotUpload, upload)) return true;
+  // Bearer fallback for tooling that sets Authorization header.
+  const authz = request.headers.get('Authorization') || '';
+  if (admin && authz.startsWith('Bearer ') && safeEqual(authz.slice(7), admin)) return true;
+  return false;
+}
+
+async function audit(env, request, action, resource, meta) {
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS admin_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, resource TEXT, meta TEXT, ip TEXT, ua TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\')))'
+    ).run();
+    await env.DB
+      .prepare('INSERT INTO admin_audit_log (action, resource, meta, ip, ua) VALUES (?, ?, ?, ?, ?)')
+      .bind(
+        String(action).slice(0, 80),
+        resource ? String(resource).slice(0, 200) : null,
+        meta ? JSON.stringify(meta).slice(0, 2000) : null,
+        (request.headers.get('CF-Connecting-IP') || '').slice(0, 64) || null,
+        (request.headers.get('User-Agent') || '').slice(0, 200) || null,
+      )
+      .run();
+  } catch { /* audit must not break the request */ }
 }
 
 async function searchCatalog(query, env) {
@@ -201,7 +246,9 @@ export default {
 
     // === API ===
     if (path === '/api/backup' && method === 'POST') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const result = await backupD1toR2(env);
+      await audit(env, request, 'backup', 'd1->r2', { keys: Object.keys(result || {}) });
       return jsonOk(result);
     }
 
@@ -271,11 +318,13 @@ export default {
     }
 
     if (path.startsWith('/api/imports/') && method === 'DELETE') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const sessionId = path.substring('/api/imports/'.length);
       try {
         const rs = await env.DB.prepare(
           'UPDATE imported_rows SET deleted = 1 WHERE session_id = ? AND deleted = 0'
         ).bind(sessionId).run();
+        await audit(env, request, 'imports.soft_delete', sessionId, { changes: rs.meta?.changes || 0 });
         return jsonOk({ deleted: rs.meta?.changes || 0 });
       } catch (e) { return jsonErr('DB delete failed: ' + e.message, 500); }
     }
@@ -311,33 +360,49 @@ export default {
     }
 
     if (path === '/api/orders' && method === 'GET') {
+      // Order list contains PII (emails, phone numbers, company, contacts) —
+      // admins only.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const rs = await env.DB.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100').all();
+        await audit(env, request, 'orders.list', null, { count: rs.results?.length || 0 });
         return jsonOk({ orders: rs.results || [] });
       } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     // === R2 каталог — отдаём gzip из бакета CATALOG ===
-        // Admin endpoint: upload catalog.gz to R2 (token-protected)
-    if (path === "/api/admin/upload-catalog" && method === "POST") {
-      const token = request.headers.get("x-upload-token");
-      if (token !== "045IUUAOXJy3aN8XrcHSVRQixAOZekA766trlu7OvIU") {
-        return jsonErr("Unauthorized", 401);
-      }
+    // Admin endpoint: upload catalog.gz to R2 (token-protected).
+    // Token is read from env.ADMIN_UPLOAD_TOKEN (or env.ADMIN_TOKEN as fallback)
+    // — never hard-coded. Rotate via `wrangler secret put ADMIN_UPLOAD_TOKEN`.
+    if (path === '/api/admin/upload-catalog' && method === 'POST') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const body = await request.arrayBuffer();
-        if (!body || body.byteLength === 0) return jsonErr("empty body", 400);
-        await env.CATALOG.put("catalog.gz", body, {
-          httpMetadata: { contentType: "application/gzip" },
+        if (!body || body.byteLength === 0) return jsonErr('empty body', 400);
+        await env.CATALOG.put('catalog.gz', body, {
+          httpMetadata: { contentType: 'application/gzip' },
           customMetadata: {
             uploaded_at: new Date().toISOString(),
-            size: String(body.byteLength)
-          }
+            size: String(body.byteLength),
+          },
         });
+        await audit(env, request, 'r2.upload', 'catalog.gz', { size: body.byteLength });
         return jsonOk({ uploaded: true, size: body.byteLength });
       } catch (e) {
-        return jsonErr("Upload failed: " + e.message, 500);
+        return jsonErr('Upload failed: ' + e.message, 500);
       }
+    }
+
+    // Admin-only audit log browse.
+    if (path === '/api/admin/audit' && method === 'GET') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
+      try {
+        await env.DB.prepare(
+          'CREATE TABLE IF NOT EXISTS admin_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, resource TEXT, meta TEXT, ip TEXT, ua TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\')))'
+        ).run();
+        const rs = await env.DB.prepare('SELECT id, action, resource, meta, ip, ua, created_at FROM admin_audit_log ORDER BY id DESC LIMIT 200').all();
+        return jsonOk({ entries: rs.results || [] });
+      } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     if (path === '/catalog.gz') {
