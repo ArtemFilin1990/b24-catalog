@@ -4,7 +4,7 @@
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Upload-Token',
   'Cache-Control': 'no-store, no-cache, must-revalidate',
 };
 
@@ -40,6 +40,61 @@ function jsonErr(message, status = 400) {
 
 async function readJSON(request) {
   try { return await request.json(); } catch (e) { return null; }
+}
+
+// ============================================================
+// Admin auth + audit
+// ============================================================
+// Constant-time string compare so a timing oracle can't leak the token.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Gate full-admin endpoints. Accepts only env.ADMIN_TOKEN — either via
+// X-Admin-Token or Authorization: Bearer. The legacy X-Upload-Token is
+// deliberately NOT accepted here; it only works on the narrow catalog
+// upload route via requireUpload() below, so a leaked upload token cannot
+// escalate to reading orders / running backups / browsing the audit log.
+function requireAdmin(request, env) {
+  const admin = env.ADMIN_TOKEN;
+  if (!admin) return false;
+  const gotAdmin = request.headers.get('X-Admin-Token') || '';
+  if (safeEqual(gotAdmin, admin)) return true;
+  const authz = request.headers.get('Authorization') || '';
+  if (authz.startsWith('Bearer ') && safeEqual(authz.slice(7), admin)) return true;
+  return false;
+}
+
+// Narrower: accept either the admin token OR the legacy upload-only token.
+// Use this only on the catalog upload endpoint.
+function requireUpload(request, env) {
+  if (requireAdmin(request, env)) return true;
+  const upload = env.ADMIN_UPLOAD_TOKEN;
+  if (!upload) return false;
+  const got = request.headers.get('X-Upload-Token') || '';
+  return safeEqual(got, upload);
+}
+
+// Assumes the admin_audit_log table exists — migration
+// migrations/0001_root_schema.sql is the source of truth. The try/catch
+// below still guards against the migration not being applied yet, but we
+// no longer run a CREATE TABLE on every request.
+async function audit(env, request, action, resource, meta) {
+  try {
+    await env.DB
+      .prepare('INSERT INTO admin_audit_log (action, resource, meta, ip, ua) VALUES (?, ?, ?, ?, ?)')
+      .bind(
+        String(action).slice(0, 80),
+        resource ? String(resource).slice(0, 200) : null,
+        meta ? JSON.stringify(meta).slice(0, 2000) : null,
+        (request.headers.get('CF-Connecting-IP') || '').slice(0, 64) || null,
+        (request.headers.get('User-Agent') || '').slice(0, 200) || null,
+      )
+      .run();
+  } catch { /* audit must not break the request */ }
 }
 
 async function searchCatalog(query, env) {
@@ -190,7 +245,7 @@ export default {
     ctx.waitUntil(backupD1toR2(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -201,7 +256,9 @@ export default {
 
     // === API ===
     if (path === '/api/backup' && method === 'POST') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const result = await backupD1toR2(env);
+      ctx.waitUntil(audit(env, request, 'backup', 'd1->r2', { keys: Object.keys(result || {}) }));
       return jsonOk(result);
     }
 
@@ -236,6 +293,9 @@ export default {
     }
 
     if (path === '/api/imports' && method === 'POST') {
+      // Bulk insert — admin-only. Public users shouldn't be able to push
+      // arbitrary rows into the shared catalog or DoS the DB.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const body = await readJSON(request);
       if (!body || !Array.isArray(body.rows) || body.rows.length === 0) {
         return jsonErr('rows[] required', 400);
@@ -271,16 +331,20 @@ export default {
     }
 
     if (path.startsWith('/api/imports/') && method === 'DELETE') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const sessionId = path.substring('/api/imports/'.length);
       try {
         const rs = await env.DB.prepare(
           'UPDATE imported_rows SET deleted = 1 WHERE session_id = ? AND deleted = 0'
         ).bind(sessionId).run();
+        ctx.waitUntil(audit(env, request, 'imports.soft_delete', sessionId, { changes: rs.meta?.changes || 0 }));
         return jsonOk({ deleted: rs.meta?.changes || 0 });
       } catch (e) { return jsonErr('DB delete failed: ' + e.message, 500); }
     }
 
     if (path === '/api/sessions' && method === 'GET') {
+      // Shows uploader email/identity — admin-only.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const rs = await env.DB.prepare(
           'SELECT id, uploaded_at, uploaded_by, filename, format, rows_count, status FROM import_sessions ORDER BY uploaded_at DESC LIMIT 200'
@@ -311,33 +375,47 @@ export default {
     }
 
     if (path === '/api/orders' && method === 'GET') {
+      // Order list contains PII (emails, phone numbers, company, contacts) —
+      // admins only.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const rs = await env.DB.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100').all();
+        ctx.waitUntil(audit(env, request, 'orders.list', null, { count: rs.results?.length || 0 }));
         return jsonOk({ orders: rs.results || [] });
       } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     // === R2 каталог — отдаём gzip из бакета CATALOG ===
-        // Admin endpoint: upload catalog.gz to R2 (token-protected)
-    if (path === "/api/admin/upload-catalog" && method === "POST") {
-      const token = request.headers.get("x-upload-token");
-      if (token !== "045IUUAOXJy3aN8XrcHSVRQixAOZekA766trlu7OvIU") {
-        return jsonErr("Unauthorized", 401);
-      }
+    // Admin endpoint: upload catalog.gz to R2 (token-protected).
+    // Token is read from env.ADMIN_UPLOAD_TOKEN (or env.ADMIN_TOKEN as fallback)
+    // — never hard-coded. Rotate via `wrangler secret put ADMIN_UPLOAD_TOKEN`.
+    if (path === '/api/admin/upload-catalog' && method === 'POST') {
+      if (!requireUpload(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const body = await request.arrayBuffer();
-        if (!body || body.byteLength === 0) return jsonErr("empty body", 400);
-        await env.CATALOG.put("catalog.gz", body, {
-          httpMetadata: { contentType: "application/gzip" },
+        if (!body || body.byteLength === 0) return jsonErr('empty body', 400);
+        await env.CATALOG.put('catalog.gz', body, {
+          httpMetadata: { contentType: 'application/gzip' },
           customMetadata: {
             uploaded_at: new Date().toISOString(),
-            size: String(body.byteLength)
-          }
+            size: String(body.byteLength),
+          },
         });
+        ctx.waitUntil(audit(env, request, 'r2.upload', 'catalog.gz', { size: body.byteLength }));
         return jsonOk({ uploaded: true, size: body.byteLength });
       } catch (e) {
-        return jsonErr("Upload failed: " + e.message, 500);
+        return jsonErr('Upload failed: ' + e.message, 500);
       }
+    }
+
+    // Admin-only audit log browse. Requires migrations/0001_root_schema.sql
+    // to have been applied.
+    if (path === '/api/admin/audit' && method === 'GET') {
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
+      try {
+        const rs = await env.DB.prepare('SELECT id, action, resource, meta, ip, ua, created_at FROM admin_audit_log ORDER BY id DESC LIMIT 200').all();
+        return jsonOk({ entries: rs.results || [] });
+      } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
 
     if (path === '/catalog.gz') {

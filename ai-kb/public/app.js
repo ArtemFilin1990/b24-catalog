@@ -6,6 +6,9 @@
   const headerTitle = $('#header-title');
   const headerSub = $('#header-sub');
   const backBtn = $('#back-btn');
+  const shell = document.querySelector('.shell');
+  const sidebar = $('#sidebar');
+  const sidebarToggle = $('#sidebar-toggle');
 
   function showView(name) {
     Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === name));
@@ -22,6 +25,25 @@
   backBtn.addEventListener('click', () => showView('chat'));
   $('#kb-back').addEventListener('click', () => showView('chat'));
 
+  // ---------- Sidebar toggle (mobile) ----------
+  function toggleSidebar(open) {
+    if (!sidebar) return;
+    const next = typeof open === 'boolean' ? open : !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', next);
+    shell?.classList.toggle('sidebar-open', next);
+  }
+  sidebarToggle?.addEventListener('click', (e) => { e.stopPropagation(); toggleSidebar(); });
+  document.addEventListener('click', (e) => {
+    if (!sidebar || !sidebar.classList.contains('open')) return;
+    if (sidebar.contains(e.target) || sidebarToggle?.contains(e.target)) return;
+    toggleSidebar(false);
+  });
+
+  $('#settings-btn')?.addEventListener('click', () => {
+    toggleSidebar(false);
+    showView('upload');
+  });
+
   // ---------- Menu sheet ----------
   const menuBtn = $('#menu-btn');
   const sheet = $('#menu-sheet');
@@ -31,7 +53,8 @@
     sheet.classList.remove('open');
     sheetOverlay.classList.remove('open');
   }
-  menuBtn.addEventListener('click', () => {
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     sheet.classList.toggle('open');
     sheetOverlay.classList.toggle('open');
   });
@@ -79,12 +102,46 @@
     return res.value || '';
   }
 
+  async function extractXlsx(file) {
+    if (!window.XLSX) throw new Error('SheetJS не загружен');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const parts = [];
+    for (const name of wb.SheetNames) {
+      const sheet = wb.Sheets[name];
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      if (csv.trim()) parts.push(`# ${name}\n${csv}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  function looksBinary(s) {
+    if (!s) return false;
+    const sample = s.slice(0, 4000);
+    // Replacement chars + control chars (excl. \n\r\t) ratio.
+    const bad = (sample.match(/[\uFFFD\x00-\x08\x0B\x0C\x0E-\x1F]/g) || []).length;
+    return bad / sample.length > 0.03;
+  }
+
   async function extractText(file) {
     const name = (file.name || '').toLowerCase();
     const type = file.type || '';
     if (name.endsWith('.pdf') || type === 'application/pdf') return extractPdf(file);
     if (name.endsWith('.docx') || type.includes('officedocument.wordprocessingml')) return extractDocx(file);
-    try { return await file.text(); } catch { return ''; }
+    if (
+      name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm') ||
+      name.endsWith('.ods') || type.includes('spreadsheet') ||
+      type === 'application/vnd.ms-excel' ||
+      type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ) return extractXlsx(file);
+    // Text-ish default. Detect binary-looking content and throw a clear error
+    // so the user doesn't end up uploading mojibake.
+    let text;
+    try { text = await file.text(); } catch { text = ''; }
+    if (looksBinary(text)) {
+      throw new Error(`Формат ${file.name.split('.').pop() || 'файла'} не распознаётся как текст. Поддерживаются: PDF, DOCX, XLSX/XLS/CSV, TXT/MD/JSON/XML/YAML/RTF. Конвертируйте в один из них или вставьте текст вручную.`);
+    }
+    return text;
   }
 
   function readAsDataUrl(file) {
@@ -180,11 +237,18 @@
   const micBtn = $('#mic-btn');
 
   const SUGGESTIONS = [
-    'аналог 6205 2RS C3',
-    'что это NU205',
-    'расшифруй 180205',
-    'подбери 7606',
+    'Аналоги ГОСТ',
+    'Запросить цену',
+    'Расшифруй маркировку',
+    'Подбор по размерам',
   ];
+
+  const SUGGESTION_PROMPTS = {
+    'Аналоги ГОСТ': 'Подбери ГОСТ-аналог по маркировке: ',
+    'Запросить цену': 'Запросить цену на подшипник ',
+    'Расшифруй маркировку': 'Расшифруй маркировку ',
+    'Подбор по размерам': 'Нужен подшипник с размерами d=_, D=_, B=_, тип _',
+  };
 
   let messages = [];
   let pending = [];
@@ -273,12 +337,26 @@
 
   function renderWelcome() {
     chatEl.innerHTML = '';
-    const row = document.createElement('div');
-    row.className = 'msg-row bot';
-    row.appendChild(makeAvatar());
-    const msg = document.createElement('div');
-    msg.className = 'msg bot';
-    msg.innerHTML = 'Здравствуйте! Я <strong>Бот Эверест</strong> — инженер по подшипникам.<br>Расшифрую маркировку, подберу аналог, объясню исполнение.<br><br><em>Популярные запросы:</em>';
+
+    // Greeting bubble
+    const greet = document.createElement('div');
+    greet.className = 'msg-row bot';
+    greet.appendChild(makeAvatar());
+    const greetMsg = document.createElement('div');
+    greetMsg.className = 'msg bot';
+    greetMsg.textContent = 'Здравствуйте! Я Бот Эверест. Чем могу помочь с подбором подшипников для вашего оборудования?';
+    greet.appendChild(greetMsg);
+    chatEl.appendChild(greet);
+
+    // Topics bubble with chips
+    const topics = document.createElement('div');
+    topics.className = 'msg-row bot';
+    topics.appendChild(makeAvatar());
+    const topicsMsg = document.createElement('div');
+    topicsMsg.className = 'msg bot';
+    const label = document.createElement('div');
+    label.innerHTML = '<strong>Вот популярные темы:</strong>';
+    topicsMsg.appendChild(label);
     const chips = document.createElement('div');
     chips.className = 'chip-row';
     for (const q of SUGGESTIONS) {
@@ -286,12 +364,16 @@
       b.type = 'button';
       b.className = 'chip';
       b.textContent = q;
-      b.addEventListener('click', () => { inputEl.value = q; autoresize(); inputEl.focus(); });
+      b.addEventListener('click', () => {
+        inputEl.value = SUGGESTION_PROMPTS[q] || q;
+        autoresize();
+        inputEl.focus();
+      });
       chips.appendChild(b);
     }
-    msg.appendChild(chips);
-    row.appendChild(msg);
-    chatEl.appendChild(row);
+    topicsMsg.appendChild(chips);
+    topics.appendChild(topicsMsg);
+    chatEl.appendChild(topics);
   }
 
   function renderPending() {
@@ -529,13 +611,101 @@
   const uploadBtn = $('#upload-btn');
   const reindexBtn = $('#reindex-btn');
 
-  try { tokenEl.value = localStorage.getItem('ai-kb-admin') || ''; } catch {}
+  try { tokenEl.value = sessionStorage.getItem('ai-kb-admin') || ''; } catch {}
 
   function setStatus(msg, kind = 'info') {
     statusEl.hidden = !msg;
     statusEl.className = 'upload-status ' + kind;
     statusEl.textContent = msg || '';
   }
+
+  // ---------- Settings (prompt + params) ----------
+  const promptEl = $('#prompt-editor');
+  const promptSaveBtn = $('#prompt-save');
+  const promptResetBtn = $('#prompt-reset');
+  const promptStatus = $('#prompt-status');
+  const pTemp = $('#p-temp');
+  const pMaxTok = $('#p-maxtok');
+  const pCatK = $('#p-catk');
+  const pVecK = $('#p-veck');
+  const paramsSaveBtn = $('#params-save');
+  const paramsStatus = $('#params-status');
+
+  // Remember factory default for the reset button.
+  let factoryPrompt = '';
+  let settingsLoaded = false;
+
+  function setInline(el, msg, kind = '') {
+    if (!el) return;
+    el.textContent = msg || '';
+    el.hidden = !msg;
+    el.className = 'inline-status' + (kind ? ' ' + kind : '');
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      const j = await r.json();
+      if (!j.ok) return;
+      const s = j.settings || {};
+      const ov = s._overrides || {};
+      // Factory prompt = whatever comes back when no override is set.
+      if (!ov.system_prompt) factoryPrompt = s.system_prompt || factoryPrompt;
+      else if (!factoryPrompt) factoryPrompt = s.system_prompt || '';
+      if (promptEl) promptEl.value = s.system_prompt || '';
+      if (pTemp) pTemp.value = s.temperature || '';
+      if (pMaxTok) pMaxTok.value = s.max_tokens || '';
+      if (pCatK) pCatK.value = s.catalog_topk || '';
+      if (pVecK) pVecK.value = s.vector_topk || '';
+      settingsLoaded = true;
+    } catch { /* ignore */ }
+  }
+  loadSettings();
+
+  async function saveSettings(patch, statusEl) {
+    const token = tokenEl.value.trim();
+    if (!token) { setInline(statusEl, 'Введите токен администратора', 'error'); return false; }
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
+    setInline(statusEl, 'Сохраняю…');
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ settings: patch }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setInline(statusEl, 'Сохранено', 'success');
+      setTimeout(() => setInline(statusEl, ''), 2500);
+      return true;
+    } catch (e) {
+      setInline(statusEl, 'Ошибка: ' + (e.message || e), 'error');
+      return false;
+    }
+  }
+
+  promptSaveBtn?.addEventListener('click', () => {
+    const text = promptEl?.value?.trim() || '';
+    if (text.length < 20) { setInline(promptStatus, 'Промпт слишком короткий', 'error'); return; }
+    saveSettings({ system_prompt: text }, promptStatus);
+  });
+
+  promptResetBtn?.addEventListener('click', async () => {
+    if (!confirm('Сбросить промпт к заводскому?')) return;
+    if (await saveSettings({ system_prompt: '' }, promptStatus)) {
+      await loadSettings();
+    }
+  });
+
+  paramsSaveBtn?.addEventListener('click', () => {
+    const patch = {
+      temperature: pTemp?.value?.trim() || '',
+      max_tokens: pMaxTok?.value?.trim() || '',
+      catalog_topk: pCatK?.value?.trim() || '',
+      vector_topk: pVecK?.value?.trim() || '',
+    };
+    saveSettings(patch, paramsStatus);
+  });
 
   fileEl.addEventListener('change', async () => {
     const f = fileEl.files?.[0];
@@ -561,7 +731,7 @@
     if (!text) return setStatus('Нет текста для загрузки', 'error');
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
 
-    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
     setStatus('Индексирую…', 'info');
     uploadBtn.disabled = true;
     try {
@@ -570,6 +740,14 @@
         headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
         body: JSON.stringify({ title, text, category, source: fileEl.files?.[0]?.name || 'manual' }),
       });
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        // Cloudflare edge (413/502/504) returns HTML; give the user a clear
+        // status code instead of a JSON parse crash.
+        const body = await r.text().catch(() => '');
+        const hint = r.status === 413 ? ' — документ слишком большой, разбейте на части' : '';
+        throw new Error(`HTTP ${r.status} ${r.statusText || ''}${hint}`.trim() || body.slice(0, 120));
+      }
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setStatus(`Готово. Добавлено ${j.chunks} фрагментов (ID ${j.kb_id}).`, 'success');
@@ -610,7 +788,7 @@
     const token = tokenEl.value.trim();
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
     if (!confirm('Перестроить индекс по всем записям knowledge_base?')) return;
-    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
     reindexBtn.disabled = true;
     let afterId = 0;
     let chunkFrom = 0;
