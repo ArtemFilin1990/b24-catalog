@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Local skills
+
+Prefer the local skills in `.claude/skills/` before generic reasoning when the task matches:
+
+- `.claude/skills/kb-audit` — review PRs, migrations, D1 schema safety, scope drift, and merge risk.
+- `.claude/skills/bearing-analog-check` — validate bearing type/series/geometry logic and enforce `NO DIRECT EQUIV` when exact matches are absent.
+- `.claude/skills/catalog-import-review` — review catalog import/staging/view logic, normalized rows, duplicate prevention, and migration bootstrap safety.
+- `.claude/skills/cloudflare-worker-review` — review Worker routes, secrets, bindings, deploy flow, Cloudflare-specific risks, and admin/auth hardening.
+- `.claude/skills/d1-migration-safety` — review D1 migration bootstrap safety, upgrade safety, helper-table dependencies, id/view collisions, and clean-db behavior.
+
+When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
+
 ## Repo shape
 
 Cloudflare mono-repo with **two workers** sharing the same D1 + R2 backing store:
