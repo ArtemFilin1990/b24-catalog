@@ -22,3 +22,10 @@ Review output:
 3. What is not confirmed
 4. Risks of a wrong substitute
 5. Safe recommendation
+
+References:
+- references/analog-rules.md
+- references/type-series-map.md
+
+Scripts:
+- scripts/check_analog.sh
