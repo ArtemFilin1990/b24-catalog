@@ -32,8 +32,11 @@ npx wrangler d1 execute baza --remote --file=ai-kb/migrations/0002_files_rules_c
 npx wrangler d1 execute baza --remote --file=ai-kb/migrations/0003_catalog_staging.sql
 npx wrangler d1 execute baza --remote --file=ai-kb/migrations/0004_catalog_master_view.sql
 
-# Ad-hoc query
+# Inspect applied state. `schema_migrations` only records the root
+# migration(s); ai-kb migrations are idempotent-by-shape and do not
+# insert into that table, so cross-check by listing actual objects:
 npx wrangler d1 execute baza --remote --command "SELECT version, applied_at FROM schema_migrations"
+npx wrangler d1 execute baza --remote --command "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
 
 # Set secrets (never commit them)
 echo "$TOKEN" | npx wrangler secret put ADMIN_TOKEN
@@ -86,8 +89,10 @@ If you touch this workflow, keep the retry loop and pin `wrangler@4.83.0` in the
 
 Single-file `ai-kb/src/index.js` (~740 lines). Request flow:
 
+`ai-kb/src/index.js` dispatches chat/search/stats/settings; the admin file registry lives in `ai-kb/src/files.js` and is imported at the top (`handleAdminFilesUpload`, `handleAdminFilesList`, `handleAdminFilesDelete`, `handleAdminStorageStats`). The file module receives `{ jsonOk, jsonErr, requireAdmin }` as helpers so both workers share the same error and auth shape without cross-worker imports.
+
 1. **`POST /api/chat`** — SSE stream. Pulls overrides from the `settings` D1 table in a *single* query (not per-key) using `??` for null-coalescing (so `catalog_topk = 0` actually disables catalog RAG). Searches in parallel:
-   - D1 FTS (`catalog_fts`, table defined in `0002_files_rules_catalog.sql`)
+   - D1 FTS via `catalog_fts` virtual table if present — `searchCatalog` tries the FTS query first and falls back to a plain LIKE if the table isn't there. FTS is not created by the committed migrations, so a fresh DB runs on LIKE until you rebuild FTS manually.
    - Vectorize semantic search (`bge-m3` 1024-dim embeddings, `searchKnowledge`)
 2. If the request carries `images: [{name, dataUrl}]`, each image is first passed through `@cf/meta/llama-3.2-11b-vision-instruct` to get a text description (`describeImage`), then the description is spliced into the user message. The vision pass is synchronous and *before* the streaming chat, so it delays first-token time.
 3. The assembled user message is `[context] + [attachment_text] + [image descriptions] + [question]`; the RAG context uses **only the pure question** so attachment text doesn't poison the FTS/vector query.
@@ -101,13 +106,14 @@ Single-file `ai-kb/src/index.js` (~740 lines). Request flow:
 
 ## D1 schema layout
 
-Canonical in `migrations/*.sql`. Applying all five gives:
+Canonical in `migrations/*.sql` — grep the file before writing a query. Fresh apply order: root `0001_root_schema.sql`, then `ai-kb/migrations/0001…0004`. Current objects:
 
-- **Catalog** — `catalog` (~58k bearings, seeded from external dump; read-only in ai-kb), `catalog_fts` (FTS5 virtual + sync triggers, defined in 0002), `catalog_staging` (review buffer; `review_status: pending|promoted|rejected`), `v_catalog` VIEW = `catalog ∪ catalog_staging WHERE review_status='promoted'`. **Prefer `v_catalog` in new read queries.**
-- **Imports/orders** — `imported_rows`, `import_sessions`, `orders` (all root-worker). Indexes on `session_id`, `created_at DESC`, `status`, `email`, `phone`.
-- **ai-kb content** — `knowledge_base` + `kb_fts` FTS5 + `chat_sessions`, `chat_messages`, `query_log`, `settings`.
-- **Files/media/jobs** (0002) — `files`, `file_chunks` (FK→files ON DELETE CASCADE; requires `PRAGMA foreign_keys = ON`), `media_assets`, `rules`, `jobs`, `cleanup_log`. Currently **schema-only MVP** — the server-side file ingestion/OCR/audio pipeline that would write into them is not implemented yet (see `docs/RUNBOOK.md` §7 backlog).
-- **Ops** — `admin_audit_log`, `schema_migrations`. Every migration ends with `INSERT OR IGNORE INTO schema_migrations (version) VALUES (...)`. Check applied state with `SELECT version FROM schema_migrations`.
+- **Legacy catalog** (root `0001`) — `catalog` (~58k bearings, read-only in ai-kb), `imported_rows`, `import_sessions`, `orders`. This is what `/api/imports`, `/api/orders`, `/api/ask` use. No FTS table committed — the `catalog_fts` referenced by `ai-kb/src/index.js:searchCatalog` is runtime-optional and only exists if someone created it out-of-band.
+- **ai-kb content** (ai-kb `0001`) — `knowledge_base` + `kb_fts` FTS5 + `chat_sessions`, `chat_messages`, `query_log`. The `settings` key-value table is created lazily by `ensureSettingsTable` in code, not in a migration — treat that as a wart.
+- **File ingest + normalized catalog** (ai-kb `0002`) — `files` (original R2 objects), `file_extracts` (per-page/sheet text + OCR), `kb_chunks` (FK→files, `ON DELETE CASCADE`; requires `PRAGMA foreign_keys = ON`), `bearing_rules` + `bearing_rule_mappings` (knowledge extracted from PDFs), `catalog_rows` + `catalog_row_issues` (normalized from xlsx/csv), `jobs`, `admin_audit_log`, `cleanup_log`.
+- **Staging** (ai-kb `0003`) — `staging_catalog_import` (review buffer for catalog imports).
+- **Read model** (ai-kb `0004`) — `catalog_master_view` VIEW over `catalog_rows` filtered by validation status; read path for the bot should prefer this over the legacy `catalog` table once populated.
+- **Ops** — `admin_audit_log`, `schema_migrations`. Only the root `0001` inserts a row into `schema_migrations`; the ai-kb migrations are idempotent by shape (`CREATE TABLE IF NOT EXISTS`) and do **not** record a row there. So `SELECT version FROM schema_migrations` only reflects root state. To verify ai-kb state, inspect objects directly: `SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`.
 
 D1 does not enforce foreign keys by default — any FK cascade depends on `PRAGMA foreign_keys = ON` being set for the connection. Migration 0002 sets it at the top; runtime code does not.
 
