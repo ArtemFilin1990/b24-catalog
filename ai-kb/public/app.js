@@ -237,7 +237,9 @@
       } else {
         try {
           const t = await extractText(f);
-          entry.text = (t || '').slice(0, 20000);
+          // Server enforces 12k total across all attachments — keep a bit
+          // more locally so several docs can still fit, but cap each to 6k.
+          entry.text = (t || '').slice(0, 6000);
           entry.extractedChars = entry.text.length;
         } catch { /* ignore */ }
       }
@@ -253,21 +255,23 @@
     if (!prompt && pending.length === 0) return;
     if (streaming) return;
 
-    // Build user content with attached text
-    let merged = prompt;
-    const attParts = [];
-    for (const p of pending) {
-      if (p.kind === 'image') attParts.push(`[Изображение: ${p.name}]`);
-      else if (p.text) attParts.push(`\n\n📎 ${p.name}:\n${p.text}`);
-      else attParts.push(`[Файл: ${p.name}, ${fmtSize(p.size)}]`);
-    }
-    if (attParts.length) merged = (prompt ? prompt + '\n\n' : '') + attParts.join('\n');
+    // Keep chat history clean: messages carry only the pure question/answer
+    // text so server-side RAG searches on a focused query. Attachments go
+    // alongside as a separate payload for the current turn only.
+    const docAttachments = pending.filter(p => p.kind !== 'image' && p.text);
+    const imgAttachments = pending.filter(p => p.kind === 'image' && p.dataUrl);
+    const otherAttachments = pending.filter(p => p.kind !== 'image' && !p.text);
+
+    const attachmentChunks = docAttachments.map(p => `📎 ${p.name}:\n${p.text}`);
+    for (const p of otherAttachments) attachmentChunks.push(`📎 ${p.name} (${fmtSize(p.size)}) — текст не распознан`);
+    const attachmentText = attachmentChunks.join('\n\n').slice(0, 12000);
 
     const displayAtts = pending.map(p => ({ name: p.name, size: p.size, kind: p.kind, dataUrl: p.dataUrl }));
     pending = [];
     renderPending();
 
-    messages.push({ role: 'user', content: merged || '(без текста)' });
+    const userContentForHistory = prompt || (displayAtts.length ? '(см. прикреплённые материалы)' : '');
+    messages.push({ role: 'user', content: userContentForHistory });
     appendUserMsg(prompt, displayAtts);
 
     inputEl.value = '';
@@ -282,7 +286,11 @@
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({
+          messages,
+          attachment_text: attachmentText || undefined,
+          images: imgAttachments.map(p => ({ name: p.name, dataUrl: p.dataUrl })),
+        }),
       });
 
       if (!resp.ok) {

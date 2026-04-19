@@ -23,10 +23,14 @@ const EMBED_DIMS = 1024;
 const MAX_HISTORY = 20;
 const MAX_CONTENT = 4000;
 const MAX_TOKENS = 900;
+const MAX_ATTACHMENT_TEXT = 12000;
+const MAX_IMAGES = 3;
 const VECTOR_TOPK = 5;
 const CATALOG_TOPK = 8;
 const CHUNK_CHARS = 1200;
 const MAX_DOC_CHARS = 300000;
+
+const VISION_MODEL = '@cf/meta/llama-3.2-11b-vision-instruct';
 const CHUNK_OVERLAP = 150;
 
 const AI_SYSTEM = `Ты — инженер-эксперт по подшипникам компании ТД «Эверест» (Вологда).
@@ -188,6 +192,36 @@ function buildContext(catalogRows, kbMatches) {
   return parts.join('\n');
 }
 
+function dataUrlToBytes(dataUrl) {
+  const m = /^data:[^;]+;base64,(.*)$/.exec(String(dataUrl || ''));
+  if (!m) return null;
+  try {
+    const bin = atob(m[1]);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+async function describeImage(env, image, userQuery) {
+  const bytes = dataUrlToBytes(image?.dataUrl);
+  if (!bytes || !bytes.length) return '';
+  const prompt = `Ты — эксперт по подшипникам. Опиши изображение максимально подробно: видимая маркировка (буквы, цифры, префиксы, суффиксы), бренд, размеры, состояние, уплотнения, тип. Если текст нечёткий — укажи это. Контекст вопроса: ${String(userQuery || '').slice(0, 240)}`;
+  try {
+    const resp = await env.AI.run(VISION_MODEL, {
+      image: Array.from(bytes),
+      prompt,
+      max_tokens: 300,
+    });
+    const text = resp?.description ?? resp?.response ?? '';
+    return String(text).trim().slice(0, 1200);
+  } catch {
+    return '';
+  }
+}
+
 async function handleChat(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
@@ -197,20 +231,37 @@ async function handleChat(request, env) {
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   if (!lastUser) return jsonErr('No user message');
 
+  // Attachments for the current turn, separate from chat messages to keep
+  // history compact and avoid noisy RAG queries.
+  const attachmentText = String(body?.attachment_text || '').slice(0, MAX_ATTACHMENT_TEXT);
+  const rawImages = Array.isArray(body?.images) ? body.images : [];
+  const images = rawImages.slice(0, MAX_IMAGES).filter(x => x && typeof x.dataUrl === 'string');
+
+  // RAG uses only the pure user question, not attachment payload.
+  const searchQuery = lastUser.content;
   const [catalogRows, kbMatches] = await Promise.all([
-    searchCatalog(env, lastUser.content).catch(() => []),
-    searchKnowledge(env, lastUser.content).catch(() => []),
+    searchCatalog(env, searchQuery).catch(() => []),
+    searchKnowledge(env, searchQuery).catch(() => []),
   ]);
 
-  const contextText = buildContext(catalogRows, kbMatches);
-  const userWithCtx = contextText
-    ? `Контекст:\n${contextText}\n\nВопрос: ${lastUser.content}`
-    : lastUser.content;
+  // Vision pass: describe each attached image up-front.
+  const imageDescs = [];
+  for (const img of images) {
+    const desc = await describeImage(env, img, searchQuery);
+    if (desc) imageDescs.push(`📷 ${String(img.name || 'image').slice(0, 80)}: ${desc}`);
+  }
+
+  const ctx = buildContext(catalogRows, kbMatches);
+  const parts = [];
+  if (ctx) parts.push('Контекст:\n' + ctx);
+  if (attachmentText) parts.push('Прикреплённые документы (фрагменты):\n' + attachmentText);
+  if (imageDescs.length) parts.push('Описание прикреплённых изображений:\n' + imageDescs.join('\n'));
+  parts.push('Вопрос: ' + searchQuery);
 
   const aiMessages = [
     { role: 'system', content: AI_SYSTEM },
     ...messages.slice(0, -1),
-    { role: 'user', content: userWithCtx },
+    { role: 'user', content: parts.join('\n\n') },
   ];
 
   let stream;
@@ -229,6 +280,7 @@ async function handleChat(request, env) {
     ...SSE_HEADERS,
     'X-Sources-Catalog': String(catalogRows.length),
     'X-Sources-Kb': String(kbMatches.length),
+    'X-Images-Described': String(imageDescs.length),
   };
   return new Response(stream, { headers });
 }
