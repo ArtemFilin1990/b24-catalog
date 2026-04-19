@@ -748,6 +748,10 @@ export default {
     // Sessions + messages
     if (path === '/api/sessions' || path.startsWith('/api/sessions/')) return handleSessions(request, env);
 
+    if (url.pathname.startsWith('/api/')) {
+      return jsonErr(`Unknown route ${request.method} ${url.pathname}`, 404);
+    }
+
     return env.ASSETS.fetch(request);
   },
 };
