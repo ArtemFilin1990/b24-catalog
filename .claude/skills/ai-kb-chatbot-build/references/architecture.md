@@ -7,7 +7,7 @@ Single Cloudflare Worker: `ai-kb` (dir: `./ai-kb`). Serves chat UI + API.
 | Binding | Kind | Name / id |
 |---|---|---|
 | `DB` | D1 | `baza` (`11a157a7-c3e0-4b6b-aa24-3026992db298`) — shared with root worker |
-| `R2` | R2 | `vedro` — shared with root worker |
+| `CATALOG` | R2 | `vedro` — shared with root worker (binding name is `CATALOG`, **not** `R2`) |
 | `VECTORIZE` | Vectorize | `ai-kb-index`, dim 1024, cosine |
 | `AI` | Workers AI | — |
 | `ASSETS` | Static | `./ai-kb/public` |

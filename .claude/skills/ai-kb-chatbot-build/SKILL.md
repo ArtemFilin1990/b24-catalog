@@ -21,7 +21,7 @@ The Everest chatbot **already exists** in this repo as the `ai-kb` worker (`ai-k
 
 - Account: `84cbacc4816c29c294101ec57a0bea5d`
 - D1 `baza` id: `11a157a7-c3e0-4b6b-aa24-3026992db298`
-- R2 bucket: `vedro`
+- R2 bucket: `vedro` (binding name `CATALOG`)
 - Vectorize index: `ai-kb-index` — 1024 dim, cosine (matches `@cf/baai/bge-m3`)
 - Chat model: `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
 - Embedding model: `@cf/baai/bge-m3`
@@ -34,7 +34,7 @@ The Everest chatbot **already exists** in this repo as the `ai-kb` worker (`ai-k
 1. Read `CLAUDE.md` and `docs/RUNBOOK.md`.
 2. Read `ai-kb/src/index.js` — single-file worker; router, chat, ingest, reindex, settings.
 3. Read `ai-kb/src/files.js` — admin file registry (upload to R2, metadata in D1 `files`).
-4. Read `ai-kb/wrangler.toml` — confirm bindings `DB`, `R2`, `VECTORIZE`, `AI`, `ASSETS`.
+4. Read `ai-kb/wrangler.toml` — confirm bindings `DB` (D1), `CATALOG` (R2, bucket `vedro`), `VECTORIZE`, `AI`, `ASSETS`.
 5. Check applied D1 state: `SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` (ai-kb migrations do not record to `schema_migrations`).
 6. If touching bearing answers, load the `bearing-analog-check` skill first.
 7. If touching migrations, load the `d1-migration-safety` skill.
