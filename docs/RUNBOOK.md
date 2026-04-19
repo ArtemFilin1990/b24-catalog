@@ -49,9 +49,9 @@ curl -X POST https://ai-kb.35ewerest.workers.dev/api/settings \
 
 ### Известные утечки (нужно ротировать)
 
-- `045IUUAOXJy3aN8XrcHSVRQixAOZekA766trlu7OvIU` — был захардкожен в `src/index.js` в `/api/admin/upload-catalog`. Удалён в этой PR, **но присутствует в git history**. Ротировать обязательно, даже если endpoint теперь требует `env.ADMIN_UPLOAD_TOKEN`.
-- `12345678` — слабый ADMIN_TOKEN для ai-kb. Заменить на случайный 32+ байта: `openssl rand -hex 32 | wrangler secret put ADMIN_TOKEN`.
-- `cfat_*` токены Cloudflare API, которые могли попасть в чат/переписку — отозвать в dashboard.
+- Старый захардкоженный `X-Upload-Token` (префикс `045IUU…`, удалён в этой PR) **всё ещё присутствует в git history** — ротировать обязательно. Полное значение не тиражируем здесь, см. коммит `9dbc82a9` в git log. Новый секрет установить: `openssl rand -hex 32 | wrangler secret put ADMIN_UPLOAD_TOKEN`.
+- Слабый `ADMIN_TOKEN` для ai-kb (короткий, из ранних тестов) — заменить: `openssl rand -hex 32 | (cd ai-kb && wrangler secret put ADMIN_TOKEN)`.
+- Любые `cfat_*` CF API-токены, попавшие в переписку/скриншоты — отозвать в https://dash.cloudflare.com/profile/api-tokens.
 
 ---
 

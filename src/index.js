@@ -53,27 +53,37 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// Gate admin endpoints behind env.ADMIN_TOKEN. Falls back to
-// env.ADMIN_UPLOAD_TOKEN when caller sends X-Upload-Token (legacy).
+// Gate full-admin endpoints. Accepts only env.ADMIN_TOKEN — either via
+// X-Admin-Token or Authorization: Bearer. The legacy X-Upload-Token is
+// deliberately NOT accepted here; it only works on the narrow catalog
+// upload route via requireUpload() below, so a leaked upload token cannot
+// escalate to reading orders / running backups / browsing the audit log.
 function requireAdmin(request, env) {
   const admin = env.ADMIN_TOKEN;
-  const upload = env.ADMIN_UPLOAD_TOKEN;
-  if (!admin && !upload) return false;
+  if (!admin) return false;
   const gotAdmin = request.headers.get('X-Admin-Token') || '';
-  const gotUpload = request.headers.get('X-Upload-Token') || '';
-  if (admin && safeEqual(gotAdmin, admin)) return true;
-  if (upload && safeEqual(gotUpload, upload)) return true;
-  // Bearer fallback for tooling that sets Authorization header.
+  if (safeEqual(gotAdmin, admin)) return true;
   const authz = request.headers.get('Authorization') || '';
-  if (admin && authz.startsWith('Bearer ') && safeEqual(authz.slice(7), admin)) return true;
+  if (authz.startsWith('Bearer ') && safeEqual(authz.slice(7), admin)) return true;
   return false;
 }
 
+// Narrower: accept either the admin token OR the legacy upload-only token.
+// Use this only on the catalog upload endpoint.
+function requireUpload(request, env) {
+  if (requireAdmin(request, env)) return true;
+  const upload = env.ADMIN_UPLOAD_TOKEN;
+  if (!upload) return false;
+  const got = request.headers.get('X-Upload-Token') || '';
+  return safeEqual(got, upload);
+}
+
+// Assumes the admin_audit_log table exists — migration
+// migrations/0001_root_schema.sql is the source of truth. The try/catch
+// below still guards against the migration not being applied yet, but we
+// no longer run a CREATE TABLE on every request.
 async function audit(env, request, action, resource, meta) {
   try {
-    await env.DB.prepare(
-      'CREATE TABLE IF NOT EXISTS admin_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, resource TEXT, meta TEXT, ip TEXT, ua TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\')))'
-    ).run();
     await env.DB
       .prepare('INSERT INTO admin_audit_log (action, resource, meta, ip, ua) VALUES (?, ?, ?, ?, ?)')
       .bind(
@@ -235,7 +245,7 @@ export default {
     ctx.waitUntil(backupD1toR2(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -248,7 +258,7 @@ export default {
     if (path === '/api/backup' && method === 'POST') {
       if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const result = await backupD1toR2(env);
-      await audit(env, request, 'backup', 'd1->r2', { keys: Object.keys(result || {}) });
+      ctx.waitUntil(audit(env, request, 'backup', 'd1->r2', { keys: Object.keys(result || {}) }));
       return jsonOk(result);
     }
 
@@ -283,6 +293,9 @@ export default {
     }
 
     if (path === '/api/imports' && method === 'POST') {
+      // Bulk insert — admin-only. Public users shouldn't be able to push
+      // arbitrary rows into the shared catalog or DoS the DB.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       const body = await readJSON(request);
       if (!body || !Array.isArray(body.rows) || body.rows.length === 0) {
         return jsonErr('rows[] required', 400);
@@ -324,12 +337,14 @@ export default {
         const rs = await env.DB.prepare(
           'UPDATE imported_rows SET deleted = 1 WHERE session_id = ? AND deleted = 0'
         ).bind(sessionId).run();
-        await audit(env, request, 'imports.soft_delete', sessionId, { changes: rs.meta?.changes || 0 });
+        ctx.waitUntil(audit(env, request, 'imports.soft_delete', sessionId, { changes: rs.meta?.changes || 0 }));
         return jsonOk({ deleted: rs.meta?.changes || 0 });
       } catch (e) { return jsonErr('DB delete failed: ' + e.message, 500); }
     }
 
     if (path === '/api/sessions' && method === 'GET') {
+      // Shows uploader email/identity — admin-only.
+      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const rs = await env.DB.prepare(
           'SELECT id, uploaded_at, uploaded_by, filename, format, rows_count, status FROM import_sessions ORDER BY uploaded_at DESC LIMIT 200'
@@ -365,7 +380,7 @@ export default {
       if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const rs = await env.DB.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100').all();
-        await audit(env, request, 'orders.list', null, { count: rs.results?.length || 0 });
+        ctx.waitUntil(audit(env, request, 'orders.list', null, { count: rs.results?.length || 0 }));
         return jsonOk({ orders: rs.results || [] });
       } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
     }
@@ -375,7 +390,7 @@ export default {
     // Token is read from env.ADMIN_UPLOAD_TOKEN (or env.ADMIN_TOKEN as fallback)
     // — never hard-coded. Rotate via `wrangler secret put ADMIN_UPLOAD_TOKEN`.
     if (path === '/api/admin/upload-catalog' && method === 'POST') {
-      if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
+      if (!requireUpload(request, env)) return jsonErr('Unauthorized', 401);
       try {
         const body = await request.arrayBuffer();
         if (!body || body.byteLength === 0) return jsonErr('empty body', 400);
@@ -386,20 +401,18 @@ export default {
             size: String(body.byteLength),
           },
         });
-        await audit(env, request, 'r2.upload', 'catalog.gz', { size: body.byteLength });
+        ctx.waitUntil(audit(env, request, 'r2.upload', 'catalog.gz', { size: body.byteLength }));
         return jsonOk({ uploaded: true, size: body.byteLength });
       } catch (e) {
         return jsonErr('Upload failed: ' + e.message, 500);
       }
     }
 
-    // Admin-only audit log browse.
+    // Admin-only audit log browse. Requires migrations/0001_root_schema.sql
+    // to have been applied.
     if (path === '/api/admin/audit' && method === 'GET') {
       if (!requireAdmin(request, env)) return jsonErr('Unauthorized', 401);
       try {
-        await env.DB.prepare(
-          'CREATE TABLE IF NOT EXISTS admin_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, resource TEXT, meta TEXT, ip TEXT, ua TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\')))'
-        ).run();
         const rs = await env.DB.prepare('SELECT id, action, resource, meta, ip, ua, created_at FROM admin_audit_log ORDER BY id DESC LIMIT 200').all();
         return jsonOk({ entries: rs.results || [] });
       } catch (e) { return jsonErr('DB read failed: ' + e.message, 500); }
