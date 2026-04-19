@@ -9,7 +9,7 @@ import {
   handleAdminStorageStats,
 } from './files.js';
 import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
-import { extractDimensions, findAnalogsByDimensions, geoRowToText } from './bearings.js';
+import { extractDimensions, extractBearingTypeHint, findAnalogsByDimensions, geoRowToText } from './bearings.js';
 
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -438,16 +438,21 @@ async function handleChat(request, env) {
   const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
   const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
 
-  // If the user wrote dimensions like "25x52x15", do a strict geometric
-  // lookup in parallel with FTS+Vectorize. FTS would let LLM hallucinate
-  // analogs that share a base number but differ in seal/clearance — the
-  // geo leg returns physically compatible bearings only.
+  // If the user wrote dimensions like "25x52x15" AND a type hint
+  // (e.g. NU205 / 6205 / 32205), do a strict geometric lookup in
+  // parallel with FTS+Vectorize. Type is required because the same
+  // d×D×B can belong to ball, cylindrical roller, tapered, etc. — geo
+  // alone would let LLM mix incompatible bearings into the "точные
+  // аналоги" block. No hint → no geo leg.
   const dims = extractDimensions(searchQuery);
+  const typeHint = extractBearingTypeHint(searchQuery);
 
   const [catalogRows, kbMatches, geoRows] = await Promise.all([
     catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
     vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
-    dims ? findAnalogsByDimensions(env.DB, dims.d_inner, dims.d_outer, dims.width).catch(() => []) : Promise.resolve([]),
+    (dims && typeHint)
+      ? findAnalogsByDimensions(env.DB, dims.d_inner, dims.d_outer, dims.width, typeHint).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
