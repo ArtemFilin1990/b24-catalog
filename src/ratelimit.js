@@ -51,7 +51,7 @@ export async function checkRate(db, bucket, limit, windowSec) {
  */
 export function bucketForRequest(request, endpoint) {
   const ip = request.headers.get('CF-Connecting-IP')
-    || request.headers.get('X-Forwarded-For')?.split(',')[0].trim()
+    || request.headers.get('X-Forwarded-For')?.split(',')?.[0]?.trim()
     || 'unknown';
   return `${endpoint}:${ip}`;
 }

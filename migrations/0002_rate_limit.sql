@@ -25,4 +25,11 @@ CREATE TABLE IF NOT EXISTS rate_limit (
 -- Индекс для чистки старых окон (DELETE WHERE window_start < ?).
 CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON rate_limit (window_start);
 
+-- Ensure the schema_migrations tracker exists even if 0001_root_schema
+-- hasn't been applied on this D1. Idempotent.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version     TEXT    PRIMARY KEY,
+  applied_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0002_rate_limit');
