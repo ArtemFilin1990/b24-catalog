@@ -451,7 +451,7 @@
         const hint = resp.status === 404
           ? ' — маршрут /api/chat не найден на сервере (проверьте деплой воркера)'
           : '';
-        const msg = (detail || statusLabel) + hint;
+        const msg = (detail.slice(0, 150) || statusLabel) + hint;
         throw new Error(msg.slice(0, 240));
       }
       if (!resp.body) throw new Error('Пустой ответ от сервера');
@@ -492,8 +492,7 @@
     } catch (e) {
       cursor.remove();
       botEl.parentElement?.remove();
-      const raw = (e && (e.message || String(e))) || '';
-      const detail = raw.trim() || 'не удалось получить ответ от бота';
+      const detail = (typeof e === 'string' ? e : e?.message)?.trim() || 'не удалось получить ответ от бота';
       appendBotMsg(`Ошибка: ${detail}`, { error: true });
       messages.pop();
     } finally {
