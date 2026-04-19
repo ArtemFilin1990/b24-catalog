@@ -102,12 +102,46 @@
     return res.value || '';
   }
 
+  async function extractXlsx(file) {
+    if (!window.XLSX) throw new Error('SheetJS не загружен');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const parts = [];
+    for (const name of wb.SheetNames) {
+      const sheet = wb.Sheets[name];
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      if (csv.trim()) parts.push(`# ${name}\n${csv}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  function looksBinary(s) {
+    if (!s) return false;
+    const sample = s.slice(0, 4000);
+    // Replacement chars + control chars (excl. \n\r\t) ratio.
+    const bad = (sample.match(/[\uFFFD\x00-\x08\x0B\x0C\x0E-\x1F]/g) || []).length;
+    return bad / sample.length > 0.03;
+  }
+
   async function extractText(file) {
     const name = (file.name || '').toLowerCase();
     const type = file.type || '';
     if (name.endsWith('.pdf') || type === 'application/pdf') return extractPdf(file);
     if (name.endsWith('.docx') || type.includes('officedocument.wordprocessingml')) return extractDocx(file);
-    try { return await file.text(); } catch { return ''; }
+    if (
+      name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm') ||
+      name.endsWith('.ods') || type.includes('spreadsheet') ||
+      type === 'application/vnd.ms-excel' ||
+      type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ) return extractXlsx(file);
+    // Text-ish default. Detect binary-looking content and throw a clear error
+    // so the user doesn't end up uploading mojibake.
+    let text;
+    try { text = await file.text(); } catch { text = ''; }
+    if (looksBinary(text)) {
+      throw new Error(`Формат ${file.name.split('.').pop() || 'файла'} не распознаётся как текст. Поддерживаются: PDF, DOCX, XLSX/XLS/CSV, TXT/MD/JSON/XML/YAML/RTF. Конвертируйте в один из них или вставьте текст вручную.`);
+    }
+    return text;
   }
 
   function readAsDataUrl(file) {
@@ -695,6 +729,14 @@
         headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
         body: JSON.stringify({ title, text, category, source: fileEl.files?.[0]?.name || 'manual' }),
       });
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        // Cloudflare edge (413/502/504) returns HTML; give the user a clear
+        // status code instead of a JSON parse crash.
+        const body = await r.text().catch(() => '');
+        const hint = r.status === 413 ? ' — документ слишком большой, разбейте на части' : '';
+        throw new Error(`HTTP ${r.status} ${r.statusText || ''}${hint}`.trim() || body.slice(0, 120));
+      }
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setStatus(`Готово. Добавлено ${j.chunks} фрагментов (ID ${j.kb_id}).`, 'success');
