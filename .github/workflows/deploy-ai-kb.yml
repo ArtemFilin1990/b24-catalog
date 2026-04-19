@@ -8,14 +8,13 @@ name: Deploy ai-kb to Cloudflare Workers
 
 on:
   push:
+    # Any push to main triggers self-heal — Cloudflare's native Git
+    # integration clobbers ai-kb on any merge (not just ai-kb/** ones),
+    # so we react to every push and short-circuit if nothing's broken.
     branches: [main]
-    paths:
-      - 'ai-kb/**'
-      - '.github/workflows/deploy-ai-kb.yml'
   schedule:
-    # Heal every 15 min — Cloudflare's native Git integration keeps
-    # clobbering ai-kb with the root b24-catalog bundle on unrelated
-    # pushes to main, so we re-assert the correct deploy periodically.
+    # Safety net: run every 15 min in case a push slipped through or
+    # failed, or a webhook didn't fire.
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
@@ -37,9 +36,15 @@ jobs:
       - name: Check current deploy and decide if redeploy needed
         id: check
         run: |
+          # On push + manual dispatch: always redeploy so fresh code ships.
+          # On schedule: only redeploy if the root isn't serving Бот Эверест.
+          if [[ "${{ github.event_name }}" != 'schedule' ]]; then
+            echo "redeploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           title=$(curl -sf https://ai-kb.35ewerest.workers.dev/ | grep -oE '<title>[^<]+</title>' | head -1 || true)
           echo "current title: $title"
-          if [[ "$title" == '<title>Бот Эверест</title>' && "${{ github.event_name }}" == 'schedule' ]]; then
+          if [[ "$title" == '<title>Бот Эверест</title>' ]]; then
             echo "redeploy=false" >> "$GITHUB_OUTPUT"
           else
             echo "redeploy=true" >> "$GITHUB_OUTPUT"
