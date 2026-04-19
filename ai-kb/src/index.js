@@ -183,16 +183,27 @@ async function handleSetSettings(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
   const updates = body?.settings || {};
+
   const saved = [];
+  const statements = [];
   for (const [k, v] of Object.entries(updates)) {
     if (!SETTING_KEYS.has(k)) continue;
     if (v == null || String(v).trim() === '') {
-      await deleteSetting(env, k);
+      statements.push(env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(k));
       saved.push({ key: k, cleared: true });
     } else {
-      await setSetting(env, k, String(v).slice(0, 60000));
+      const val = String(v).slice(0, 60000);
+      statements.push(
+        env.DB
+          .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+          .bind(k, val)
+      );
       saved.push({ key: k, updated: true });
     }
+  }
+  if (statements.length) {
+    await ensureSettingsTable(env);
+    await env.DB.batch(statements);
   }
   return jsonOk({ saved });
 }
@@ -391,19 +402,25 @@ async function handleChat(request, env) {
   const t0 = Date.now();
   const searchQuery = lastUser.content;
 
-  // Pull runtime overrides from the settings table (admin may have tuned
-  // them via the gear menu). Fall back to the compile-time constants.
-  const [sysPrompt, tempRaw, maxTokRaw, catalogKRaw, vectorKRaw] = await Promise.all([
-    getSetting(env, 'system_prompt', AI_SYSTEM),
-    getSetting(env, 'temperature', '0.2'),
-    getSetting(env, 'max_tokens', String(MAX_TOKENS)),
-    getSetting(env, 'catalog_topk', String(CATALOG_TOPK)),
-    getSetting(env, 'vector_topk', String(VECTOR_TOPK)),
-  ]);
-  const temperature = Math.max(0, Math.min(1.5, parseFloat(tempRaw) || 0.2));
-  const maxTokens = Math.max(64, Math.min(2000, parseInt(maxTokRaw, 10) || MAX_TOKENS));
-  const catalogTopK = Math.max(0, Math.min(20, parseInt(catalogKRaw, 10) || CATALOG_TOPK));
-  const vectorTopK = Math.max(0, Math.min(20, parseInt(vectorKRaw, 10) || VECTOR_TOPK));
+  // Pull all overrides in a single D1 query. Use ?? so explicit 0 values
+  // (e.g. catalog_topk=0 to disable the catalog leg) aren't swallowed by ||.
+  let sRows = [];
+  try {
+    await ensureSettingsTable(env);
+    const res = await env.DB.prepare('SELECT key, value FROM settings').all();
+    sRows = res.results || [];
+  } catch { /* settings table unreachable — fall back to constants */ }
+  const sMap = Object.fromEntries(sRows.map(r => [r.key, r.value]));
+
+  const sysPrompt   = sMap.system_prompt || AI_SYSTEM;
+  const tempNum     = parseFloat(sMap.temperature ?? '0.2');
+  const temperature = Math.max(0, Math.min(1.5, Number.isFinite(tempNum) ? tempNum : 0.2));
+  const maxTokNum   = parseInt(sMap.max_tokens ?? MAX_TOKENS, 10);
+  const maxTokens   = Math.max(64, Math.min(2000, Number.isFinite(maxTokNum) ? maxTokNum : MAX_TOKENS));
+  const catalogNum  = parseInt(sMap.catalog_topk ?? CATALOG_TOPK, 10);
+  const catalogTopK = Math.max(0, Math.min(20, Number.isFinite(catalogNum) ? catalogNum : CATALOG_TOPK));
+  const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
+  const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
 
   const [catalogRows, kbMatches] = await Promise.all([
     catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
