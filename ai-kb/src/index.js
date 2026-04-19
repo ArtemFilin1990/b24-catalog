@@ -8,6 +8,7 @@ import {
   handleAdminFilesDelete,
   handleAdminStorageStats,
 } from './files.js';
+import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
 
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -725,7 +726,14 @@ export default {
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: FRAME_HEADERS });
 
-    if (path === '/api/chat'   && method === 'POST') return handleChat(request, env);
+    if (path === '/api/chat'   && method === 'POST') {
+      // Chat burns 70B inference + bge-m3 embed + maybe vision per turn,
+      // so each request is expensive. 30/min is ~1 per 2s — more than
+      // enough for humans, stops scripts cold.
+      const rl = await checkRate(env.DB, bucketForRequest(request, 'chat'), 30, 60);
+      if (!rl.allowed) return rateLimitedResponse(rl);
+      return handleChat(request, env);
+    }
     if (path === '/api/search' && method === 'GET')  return handleSearch(request, env);
     if (path === '/api/ingest' && method === 'POST') return handleIngest(request, env);
     if (path === '/api/reindex'&& method === 'POST') return handleReindex(request, env);

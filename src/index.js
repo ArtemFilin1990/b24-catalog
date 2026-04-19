@@ -1,6 +1,8 @@
 // src/index.js
 // Worker: отдаёт каталог, хранит импорты и заявки в D1.
 
+import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
+
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
@@ -266,14 +268,18 @@ export default {
       return jsonOk({ app: 'catalog', time: new Date().toISOString() });
     }
 
-    if (path === '/api/ask' && method === 'POST') {
-      const body = await readJSON(request);
-      const question = (body?.question || body?.message || '').trim();
-      return askAi(question, env);
-    }
-
-    if (path === '/api/ask' && method === 'GET') {
-      const question = (url.searchParams.get('q') || '').trim();
+    if (path === '/api/ask' && (method === 'POST' || method === 'GET')) {
+      // Workers AI is metered — 20 req/min per IP is plenty for humans,
+      // enough to break scripted abuse before it burns neurons.
+      const rl = await checkRate(env.DB, bucketForRequest(request, 'ask'), 20, 60);
+      if (!rl.allowed) return rateLimitedResponse(rl);
+      let question;
+      if (method === 'POST') {
+        const body = await readJSON(request);
+        question = (body?.question || body?.message || '').trim();
+      } else {
+        question = (url.searchParams.get('q') || '').trim();
+      }
       return askAi(question, env);
     }
 
@@ -354,6 +360,10 @@ export default {
     }
 
     if (path === '/api/orders' && method === 'POST') {
+      // Public endpoint — protect against spam/fraud with a per-IP cap.
+      // Real customers rarely submit more than one order per hour.
+      const rl = await checkRate(env.DB, bucketForRequest(request, 'orders'), 5, 3600);
+      if (!rl.allowed) return rateLimitedResponse(rl);
       const body = await readJSON(request);
       if (!body || !body.contact) return jsonErr('contact{} required', 400);
       const contact = body.contact;
