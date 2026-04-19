@@ -600,7 +600,7 @@
   const uploadBtn = $('#upload-btn');
   const reindexBtn = $('#reindex-btn');
 
-  try { tokenEl.value = localStorage.getItem('ai-kb-admin') || ''; } catch {}
+  try { tokenEl.value = sessionStorage.getItem('ai-kb-admin') || ''; } catch {}
 
   function setStatus(msg, kind = 'info') {
     statusEl.hidden = !msg;
@@ -654,7 +654,7 @@
   async function saveSettings(patch, statusEl) {
     const token = tokenEl.value.trim();
     if (!token) { setInline(statusEl, 'Введите токен администратора', 'error'); return false; }
-    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
     setInline(statusEl, 'Сохраняю…');
     try {
       const r = await fetch('/api/settings', {
@@ -720,7 +720,7 @@
     if (!text) return setStatus('Нет текста для загрузки', 'error');
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
 
-    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
     setStatus('Индексирую…', 'info');
     uploadBtn.disabled = true;
     try {
@@ -777,7 +777,7 @@
     const token = tokenEl.value.trim();
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
     if (!confirm('Перестроить индекс по всем записям knowledge_base?')) return;
-    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    try { sessionStorage.setItem('ai-kb-admin', token); } catch {}
     reindexBtn.disabled = true;
     let afterId = 0;
     let chunkFrom = 0;
