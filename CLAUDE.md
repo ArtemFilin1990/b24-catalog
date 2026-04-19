@@ -4,15 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Local skills
 
-Prefer the local skills in `.claude/skills/` before generic reasoning when the task matches:
+This repo ships six playbooks in `.claude/skills/` that encode hard-won repo-specific rules. An agent must load the matching skill **before** generic reasoning when the task trigger below applies. The layout, composition rules, and decision tree live in [`.claude/skills/README.md`](.claude/skills/README.md) — read that when adding, removing, or renaming a skill.
 
-- `.claude/skills/kb-audit` — review PRs, migrations, D1 schema safety, scope drift, and merge risk.
-- `.claude/skills/bearing-analog-check` — validate bearing type/series/geometry logic and enforce `NO DIRECT EQUIV` when exact matches are absent.
-- `.claude/skills/catalog-import-review` — review catalog import/staging/view logic, normalized rows, duplicate prevention, and migration bootstrap safety.
-- `.claude/skills/cloudflare-worker-review` — review Worker routes, secrets, bindings, deploy flow, Cloudflare-specific risks, and admin/auth hardening.
-- `.claude/skills/d1-migration-safety` — review D1 migration bootstrap safety, upgrade safety, helper-table dependencies, id/view collisions, and clean-db behavior.
+- [`.claude/skills/kb-audit`](.claude/skills/kb-audit) — top-level PR review: scope discipline, merge-decision matrix, composes the four specialist review skills below.
+- [`.claude/skills/cloudflare-worker-review`](.claude/skills/cloudflare-worker-review) — Worker routes, bindings, secrets, admin/upload auth, audit coverage, and the `deploy-ai-kb.yml` hardening invariants.
+- [`.claude/skills/d1-migration-safety`](.claude/skills/d1-migration-safety) — bootstrap/upgrade safety, FK pragma, `schema_migrations` semantics, view-uid and dedupe rules.
+- [`.claude/skills/catalog-import-review`](.claude/skills/catalog-import-review) — R2 → `files` → `file_extracts` → staging → `catalog_rows` → `catalog_master_view` pipeline, duplicate prevention, bot read path.
+- [`.claude/skills/bearing-analog-check`](.claude/skills/bearing-analog-check) — type/series/geometry rules for bearing analogs, status vocabulary, ГОСТ ↔ ISO traps, commercial-data boundary.
+- [`.claude/skills/ai-kb-chatbot-build`](.claude/skills/ai-kb-chatbot-build) — the single generative skill: extend or fix the live `ai-kb` chatbot with D1 memory, Vectorize RAG, R2 ingest, admin settings, and safe bearing answers.
 
-When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
+Each skill directory has the same shape: `SKILL.md` (frontmatter + workflow + output contract), `references/*.md` (authoritative rule sheets), `scripts/*.sh` (static checks or a smoke test). Run the relevant script — they are offline except for `ai-kb-chatbot-build/scripts/smoke_chat.sh`.
+
+When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, catalog read models, or building/extending the Everest chatbot, **load the matching local skill first** and follow its checklist.
+
+## Donor reference packs
+
+`skill-packs/` holds third-party/donor material that is **not** production code. Treat it as reading-only background when tuning prompts or validating bearing logic:
+
+- `skill-packs/ewerest-ai-chatbot/` — an earlier standalone chatbot design. Useful donor material is in `references/bearing-rules.md` and `references/system-prompt.md`. The package's `src/`, `scripts/d1_schema.sql`, `scripts/seed_catalog.py` and `wrangler-template.toml` conflict with the live `ai-kb` worker and live D1 schema — **do not copy them into `src/` or `ai-kb/src/`**. See `skill-packs/ewerest-ai-chatbot/INTEGRATION.md` for the file-by-file mapping and rejected items.
 
 ## Repo shape
 
@@ -23,7 +32,7 @@ Cloudflare mono-repo with **two workers** sharing the same D1 + R2 backing store
 | `b24-catalog` | `./src`, `./public`, `./wrangler.toml` | `b24-catalog.35ewerest.workers.dev` | Bearings catalog: static HTML + `/api/imports`, `/api/orders`, `/api/ask` (Llama 3.1 8B), `catalog.gz` from R2, D1→R2 nightly backup via cron `0 3 * * *`. |
 | `ai-kb` | `./ai-kb` | `ai-kb.35ewerest.workers.dev` | "Бот Эверест" chat UI: SSE streaming chat with RAG (D1 FTS + Vectorize), editable system prompt, image attachments (vision), file ingestion, session history. |
 
-Shared bindings: D1 `baza` (id `11a157a7-c3e0-4b6b-aa24-3026992db298`), R2 `vedro` bucket, Workers AI, Vectorize `ai-kb-index` (1024 dim, cosine). Account `84cbacc4816c29c294101ec57a0bea5d`.
+Shared bindings: D1 `baza` (id `11a157a7-c3e0-4b6b-aa24-3026992db298`), R2 `vedro` bucket (binding name `CATALOG` in both workers — **not** `R2`), Workers AI, Vectorize `ai-kb-index` (1024 dim, cosine). Account `84cbacc4816c29c294101ec57a0bea5d`.
 
 Everything server-side is vanilla Workers JS — **no bundler, no TypeScript, no build step, no package.json**. Edit `.js` / `.html` / `.css` directly, `wrangler deploy` ships it.
 
