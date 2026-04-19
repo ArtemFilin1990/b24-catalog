@@ -45,9 +45,28 @@ export function extractBearingTypeHint(query) {
   // Cylindrical roller letter prefixes — letters followed by digits.
   // \b doesn't fire between letter and digit (both are word chars), so
   // use a lookahead at a digit instead. Order longest-first so NUP wins
-  // over NU. Final \b matches the start of the part number.
+  // over NU.
   const rollerLetter = s.match(/\b(NUP|NJP|NUJ|NF|NP|NU|NJ|N)(?=\d)/);
   if (rollerLetter) return rollerLetter[1];
+
+  // GOST 6-digit catalog codes (most specific, check before 5/4-digit).
+  //   180xxx → 6xxx-2RS         ball (radial, two rubber seals)
+  //   80xxx  → 6xxxZZ           ball (radial, two metal shields)
+  //   60xxx  → 6xxxZ            ball (radial, one shield)
+  //   50xxx  → 6xxxN            ball (radial, snap-ring groove)
+  //   32xxxx → NUxxxx           cylindrical roller
+  //   12xxxx → NJxxxx           cylindrical roller
+  //   42xxxx → NUPxxxx          cylindrical roller
+  //   2xxxx  → Nxxxx            cylindrical roller
+  //   36xxxx → 7xxxC            angular-contact ball
+  //   46xxxx → 7xxxAC           angular-contact ball
+  //   66xxxx → 7xxxB            angular-contact ball
+  // We tag with the equivalent ISO hint already known to typeLabelsFor.
+  if (/\b180\d{3}\b/.test(s) || /\b80\d{3}\b/.test(s) ||
+      /\b60\d{3}\b/.test(s) || /\b50\d{3}\b/.test(s)) return '62XX';
+  if (/\b36\d{4}\b/.test(s) || /\b46\d{4}\b/.test(s) || /\b66\d{4}\b/.test(s)) return '72XX';
+  if (/\b32\d{4}\b/.test(s) || /\b42\d{4}\b/.test(s) || /\b12\d{4}\b/.test(s)) return 'NU';
+
   // 5-digit ISO conical/spherical roller (30xxx, 31xxx, 32xxx, 22xxx, 23xxx).
   const fiveDigit = s.match(/\b(30|31|32|22|23)\d{3}\b/);
   if (fiveDigit) return fiveDigit[1] + 'xxx';
@@ -60,31 +79,42 @@ export function extractBearingTypeHint(query) {
   return null;
 }
 
-function typeFilterClause(typeHint) {
+// Map canonical hint tokens to the russian-language labels stored in
+// catalog.type (filled by the backfill). Returns an array of matching
+// labels because some hints map to multiple legitimate types (e.g. 7xxx
+// in GOST is tapered roller, in ISO is angular-contact ball — keep both).
+function typeLabelsFor(typeHint) {
   if (!typeHint) return null;
-  // Letter prefixes (NU, NJ, NUP…) — GLOB on base_number prefix.
-  if (/^[A-Z]+$/.test(typeHint)) {
-    return { sql: 'AND base_number GLOB ?', param: typeHint + '*' };
+  const T = typeHint.toUpperCase();
+  // Cylindrical roller letter prefixes (ISO).
+  if (['N', 'NU', 'NJ', 'NUP', 'NF', 'NP', 'NUJ', 'NJP'].includes(T)) {
+    return ['Роликовый цилиндрический'];
   }
-  // Numeric hint shaped like "<digits>x...": strip every 'x' to get the
-  // exact numeric prefix, then pad with as many GLOB '?' as there were
-  // 'x's. Examples:
-  //   '6xx'  → prefix '6',  4 chars total → '6??*'  (wait — 6xx = 3 chars
-  //                                                  total → must produce
-  //                                                  4-digit numbers like
-  //                                                  6204; pattern '6???*'
-  //                                                  is wrong. Correct
-  //                                                  pattern: prefix + ?? + *)
-  //   '60xx' → '60??*' (matches 6004, 6005…)
-  //   '32xxx'→ '32???*' (matches 32205, 32310…)
-  //   '8xxx' → '8???*' (matches 8205, 8211…)
-  // Rule: for every 'x' in the hint, append one '?'.
-  const xCount = (typeHint.match(/x/gi) || []).length;
-  if (xCount > 0) {
-    const prefix = typeHint.replace(/x/gi, '');
-    return { sql: 'AND base_number GLOB ?', param: prefix + '?'.repeat(xCount) + '*' };
+  // ISO ball families (4-digit). 6xx/16xx = radial, 7xx = angular-contact.
+  if (['60XX', '62XX', '63XX', '64XX', '16XX'].includes(T)) {
+    return ['Шариковый радиальный'];
   }
+  if (['70XX', '72XX', '73XX'].includes(T)) {
+    return ['Шариковый радиально-упорный'];
+  }
+  // 5-digit ISO roller series.
+  if (T === '22XXX' || T === '23XXX') {
+    return ['Роликовый сферический'];
+  }
+  if (T === '30XXX' || T === '31XXX' || T === '32XXX') {
+    return ['Роликовый конический'];
+  }
+  // GOST 4-digit families. 7xxx = tapered roller per ГОСТ 333; 8xxx = upor.
+  if (T === '7XXX') return ['Роликовый конический'];
+  if (T === '8XXX') return ['Упорный шариковый', 'Упорный роликовый'];
   return null;
+}
+
+function typeFilterClause(typeHint) {
+  const labels = typeLabelsFor(typeHint);
+  if (!labels || labels.length === 0) return null;
+  const placeholders = labels.map(() => '?').join(', ');
+  return { sql: `AND type IN (${placeholders})`, params: labels };
 }
 
 /**
@@ -112,7 +142,7 @@ export async function findAnalogsByDimensions(db, d_inner, d_outer, width, typeH
     'd_inner, d_outer, width_mm, seal, clearance, price_rub, qty ' +
     'FROM catalog ' +
     'WHERE d_inner = ? AND d_outer = ? AND width_mm = ? ' + filter.sql;
-  const params = [d_inner, d_outer, width, filter.param];
+  const params = [d_inner, d_outer, width, ...filter.params];
   if (excludeBaseNumber) {
     sql += ' AND base_number != ?';
     params.push(excludeBaseNumber);
