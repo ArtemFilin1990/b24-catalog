@@ -6,6 +6,9 @@
   const headerTitle = $('#header-title');
   const headerSub = $('#header-sub');
   const backBtn = $('#back-btn');
+  const shell = document.querySelector('.shell');
+  const sidebar = $('#sidebar');
+  const sidebarToggle = $('#sidebar-toggle');
 
   function showView(name) {
     Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === name));
@@ -22,6 +25,21 @@
   backBtn.addEventListener('click', () => showView('chat'));
   $('#kb-back').addEventListener('click', () => showView('chat'));
 
+  // ---------- Sidebar toggle (mobile) ----------
+  function toggleSidebar(open) {
+    const next = typeof open === 'boolean' ? open : !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', next);
+    shell?.classList.toggle('sidebar-open', next);
+  }
+  sidebarToggle?.addEventListener('click', (e) => { e.stopPropagation(); toggleSidebar(); });
+  document.addEventListener('click', (e) => {
+    if (!sidebar.classList.contains('open')) return;
+    if (sidebar.contains(e.target) || sidebarToggle.contains(e.target)) return;
+    toggleSidebar(false);
+  });
+
+  $('#settings-btn')?.addEventListener('click', () => showView('upload'));
+
   // ---------- Menu sheet ----------
   const menuBtn = $('#menu-btn');
   const sheet = $('#menu-sheet');
@@ -31,7 +49,8 @@
     sheet.classList.remove('open');
     sheetOverlay.classList.remove('open');
   }
-  menuBtn.addEventListener('click', () => {
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     sheet.classList.toggle('open');
     sheetOverlay.classList.toggle('open');
   });
@@ -180,11 +199,18 @@
   const micBtn = $('#mic-btn');
 
   const SUGGESTIONS = [
-    'аналог 6205 2RS C3',
-    'что это NU205',
-    'расшифруй 180205',
-    'подбери 7606',
+    'Аналоги ГОСТ',
+    'Запросить цену',
+    'Расшифруй маркировку',
+    'Подбор по размерам',
   ];
+
+  const SUGGESTION_PROMPTS = {
+    'Аналоги ГОСТ': 'Подбери ГОСТ-аналог по маркировке: ',
+    'Запросить цену': 'Запросить цену на подшипник ',
+    'Расшифруй маркировку': 'Расшифруй маркировку ',
+    'Подбор по размерам': 'Нужен подшипник с размерами d=_, D=_, B=_, тип _',
+  };
 
   let messages = [];
   let pending = [];
@@ -273,12 +299,26 @@
 
   function renderWelcome() {
     chatEl.innerHTML = '';
-    const row = document.createElement('div');
-    row.className = 'msg-row bot';
-    row.appendChild(makeAvatar());
-    const msg = document.createElement('div');
-    msg.className = 'msg bot';
-    msg.innerHTML = 'Здравствуйте! Я <strong>Бот Эверест</strong> — инженер по подшипникам.<br>Расшифрую маркировку, подберу аналог, объясню исполнение.<br><br><em>Популярные запросы:</em>';
+
+    // Greeting bubble
+    const greet = document.createElement('div');
+    greet.className = 'msg-row bot';
+    greet.appendChild(makeAvatar());
+    const greetMsg = document.createElement('div');
+    greetMsg.className = 'msg bot';
+    greetMsg.textContent = 'Здравствуйте! Я Бот Эверест. Чем могу помочь с подбором подшипников для вашего оборудования?';
+    greet.appendChild(greetMsg);
+    chatEl.appendChild(greet);
+
+    // Topics bubble with chips
+    const topics = document.createElement('div');
+    topics.className = 'msg-row bot';
+    topics.appendChild(makeAvatar());
+    const topicsMsg = document.createElement('div');
+    topicsMsg.className = 'msg bot';
+    const label = document.createElement('div');
+    label.innerHTML = '<strong>Вот популярные темы:</strong>';
+    topicsMsg.appendChild(label);
     const chips = document.createElement('div');
     chips.className = 'chip-row';
     for (const q of SUGGESTIONS) {
@@ -286,12 +326,16 @@
       b.type = 'button';
       b.className = 'chip';
       b.textContent = q;
-      b.addEventListener('click', () => { inputEl.value = q; autoresize(); inputEl.focus(); });
+      b.addEventListener('click', () => {
+        inputEl.value = SUGGESTION_PROMPTS[q] || q;
+        autoresize();
+        inputEl.focus();
+      });
       chips.appendChild(b);
     }
-    msg.appendChild(chips);
-    row.appendChild(msg);
-    chatEl.appendChild(row);
+    topicsMsg.appendChild(chips);
+    topics.appendChild(topicsMsg);
+    chatEl.appendChild(topics);
   }
 
   function renderPending() {
