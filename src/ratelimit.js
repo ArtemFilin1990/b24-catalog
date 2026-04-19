@@ -58,7 +58,17 @@ export function bucketForRequest(request, endpoint) {
 
 /**
  * Standard 429 response with Retry-After + RateLimit headers per draft RFC.
+ * Ships default CORS headers so a browser client can actually read the body
+ * on cross-origin usage. Callers can pass their worker-local FRAME_HEADERS
+ * to override (e.g. when a tighter allow-origin whitelist is wanted).
  */
+const DEFAULT_CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Upload-Token',
+  'Access-Control-Expose-Headers': 'Retry-After, X-RateLimit-Remaining, X-RateLimit-Reset',
+};
+
 export function rateLimitedResponse(result, headers = {}) {
   const retryAfter = Math.max(1, result.resetAt - Math.floor(Date.now() / 1000));
   return new Response(
@@ -66,7 +76,9 @@ export function rateLimitedResponse(result, headers = {}) {
     {
       status: 429,
       headers: {
+        ...DEFAULT_CORS,
         'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
         'Retry-After': String(retryAfter),
         'X-RateLimit-Remaining': '0',
         'X-RateLimit-Reset': String(result.resetAt),
