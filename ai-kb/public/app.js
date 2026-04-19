@@ -1,13 +1,49 @@
 (function () {
   const $ = (sel) => document.querySelector(sel);
 
-  // ---------- Tabs ----------
-  const tabs = document.querySelectorAll('.tab');
+  // ---------- View routing ----------
   const views = { chat: $('#view-chat'), upload: $('#view-upload') };
-  tabs.forEach(t => t.addEventListener('click', () => {
-    tabs.forEach(x => x.classList.toggle('active', x === t));
-    Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === t.dataset.tab));
-  }));
+  const headerTitle = $('#header-title');
+  const headerSub = $('#header-sub');
+  const backBtn = $('#back-btn');
+
+  function showView(name) {
+    Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === name));
+    if (name === 'upload') {
+      headerTitle.textContent = 'База знаний';
+      headerSub.textContent = 'Управление контентом';
+      backBtn.hidden = false;
+    } else {
+      headerTitle.textContent = 'Бот Эверест';
+      headerSub.textContent = 'В сети';
+      backBtn.hidden = true;
+    }
+  }
+  backBtn.addEventListener('click', () => showView('chat'));
+  $('#kb-back').addEventListener('click', () => showView('chat'));
+
+  // ---------- Menu sheet ----------
+  const menuBtn = $('#menu-btn');
+  const sheet = $('#menu-sheet');
+  const sheetOverlay = $('#sheet-overlay');
+
+  function closeMenu() {
+    sheet.classList.remove('open');
+    sheetOverlay.classList.remove('open');
+  }
+  menuBtn.addEventListener('click', () => {
+    sheet.classList.toggle('open');
+    sheetOverlay.classList.toggle('open');
+  });
+  sheetOverlay.addEventListener('click', closeMenu);
+  sheet.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.action;
+      closeMenu();
+      if (act === 'kb') showView('upload');
+      else if (act === 'clear') clearChat();
+    });
+  });
 
   // ---------- Stats ----------
   async function loadStats() {
@@ -85,8 +121,6 @@
       .replace(/`([^`]+?)`/g, '<code>$1</code>');
   }
 
-  // Minimal markdown renderer for chat responses: pipe tables, bullets,
-  // inline emphasis, preserved line breaks. No external library.
   function renderMarkdown(md) {
     if (!md) return '';
     const lines = md.replace(/\r/g, '').split('\n');
@@ -94,8 +128,6 @@
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
-
-      // Table block: at least header + separator
       if (line.trim().startsWith('|') && i + 1 < lines.length &&
           /^\s*\|?\s*:?-+/.test(lines[i + 1])) {
         const header = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
@@ -118,8 +150,6 @@
         out.push(html);
         continue;
       }
-
-      // Bullet list
       if (/^\s*[-•]\s+/.test(line)) {
         const items = [];
         while (i < lines.length && /^\s*[-•]\s+/.test(lines[i])) {
@@ -129,63 +159,36 @@
         out.push('<ul class="md-list">' + items.map(x => `<li>${renderInline(x)}</li>`).join('') + '</ul>');
         continue;
       }
-
-      // Blank line / paragraph break
       if (!line.trim()) { out.push(''); i++; continue; }
-
-      // Default: paragraph line
       out.push(`<p class="md-p">${renderInline(line)}</p>`);
       i++;
     }
     return out.join('');
   }
 
+  // ---------- Bot avatar SVG ----------
+  const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4 16 L9 10 L12 13 L16 8 L20 16 Z" fill="currentColor" stroke="none"/></svg>';
+
   // ---------- Chat ----------
   const chatEl = $('#chat');
   const formEl = $('#form');
   const inputEl = $('#input');
   const sendEl = $('#send');
-  const clearEl = $('#clear-btn');
   const attachBtn = $('#attach-btn');
   const attachInput = $('#attach-input');
   const attachedListEl = $('#attached-list');
+  const micBtn = $('#mic-btn');
 
-  const EXAMPLES = [
+  const SUGGESTIONS = [
     'аналог 6205 2RS C3',
-    'что это за подшипник 180205',
-    'подбери аналог для NU205',
-    'расшифруй 7606',
+    'что это NU205',
+    'расшифруй 180205',
+    'подбери 7606',
   ];
 
-  // Chat messages for the model: [{ role, content }]
   let messages = [];
-  // Client-side metadata per message index (attachments for display)
-  let attachmentsByMsg = {};
-  // Currently pending attachments before send
   let pending = [];
   let streaming = false;
-
-  function renderEmptyState() {
-    chatEl.innerHTML = '';
-    const wrap = document.createElement('div');
-    wrap.className = 'empty-state';
-    wrap.innerHTML = '<h2>Чем помочь?</h2><p>Подберу подшипник, найду аналог, расшифрую маркировку. Можно прислать фото таблички или PDF со спецификацией.</p><div class="examples"></div>';
-    const ex = wrap.querySelector('.examples');
-    EXAMPLES.forEach(q => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'example-chip';
-      b.textContent = q;
-      b.addEventListener('click', () => { inputEl.value = q; autoresize(); inputEl.focus(); });
-      ex.appendChild(b);
-    });
-    chatEl.appendChild(wrap);
-  }
-
-  function clearEmpty() {
-    const e = chatEl.querySelector('.empty-state');
-    if (e) e.remove();
-  }
 
   function scrollToBottom() {
     requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
@@ -193,7 +196,7 @@
 
   function autoresize() {
     inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
   }
 
   function setStreaming(v) {
@@ -201,6 +204,13 @@
     sendEl.disabled = v;
     attachBtn.disabled = v;
     inputEl.disabled = v;
+  }
+
+  function makeAvatar() {
+    const a = document.createElement('div');
+    a.className = 'avatar';
+    a.innerHTML = AVATAR_SVG;
+    return a;
   }
 
   function renderAttachmentChips(container, atts) {
@@ -225,28 +235,33 @@
   }
 
   function appendUserMsg(text, atts) {
-    clearEmpty();
-    const el = document.createElement('div');
-    el.className = 'msg user';
-    renderAttachmentChips(el, atts);
+    const row = document.createElement('div');
+    row.className = 'msg-row user';
+    const msg = document.createElement('div');
+    msg.className = 'msg user';
+    renderAttachmentChips(msg, atts);
     if (text) {
       const t = document.createElement('div');
       t.textContent = text;
-      el.appendChild(t);
+      msg.appendChild(t);
     }
-    chatEl.appendChild(el);
+    row.appendChild(msg);
+    chatEl.appendChild(row);
     scrollToBottom();
-    return el;
+    return msg;
   }
 
   function appendBotMsg(content = '', { error = false } = {}) {
-    clearEmpty();
-    const el = document.createElement('div');
-    el.className = `msg bot${error ? ' error' : ''}`;
-    el.textContent = content;
-    chatEl.appendChild(el);
+    const row = document.createElement('div');
+    row.className = 'msg-row bot';
+    row.appendChild(makeAvatar());
+    const msg = document.createElement('div');
+    msg.className = `msg bot${error ? ' error' : ''}`;
+    msg.textContent = content;
+    row.appendChild(msg);
+    chatEl.appendChild(row);
     scrollToBottom();
-    return el;
+    return msg;
   }
 
   function appendCursor(el) {
@@ -256,7 +271,29 @@
     return c;
   }
 
-  // ---------- Pending attachments UI ----------
+  function renderWelcome() {
+    chatEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'msg-row bot';
+    row.appendChild(makeAvatar());
+    const msg = document.createElement('div');
+    msg.className = 'msg bot';
+    msg.innerHTML = 'Здравствуйте! Я <strong>Бот Эверест</strong> — инженер по подшипникам.<br>Расшифрую маркировку, подберу аналог, объясню исполнение.<br><br><em>Популярные запросы:</em>';
+    const chips = document.createElement('div');
+    chips.className = 'chip-row';
+    for (const q of SUGGESTIONS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.textContent = q;
+      b.addEventListener('click', () => { inputEl.value = q; autoresize(); inputEl.focus(); });
+      chips.appendChild(b);
+    }
+    msg.appendChild(chips);
+    row.appendChild(msg);
+    chatEl.appendChild(row);
+  }
+
   function renderPending() {
     attachedListEl.innerHTML = '';
     pending.forEach((p, idx) => {
@@ -307,8 +344,6 @@
       } else {
         try {
           const t = await extractText(f);
-          // Server enforces 12k total across all attachments — keep a bit
-          // more locally so several docs can still fit, but cap each to 6k.
           entry.text = (t || '').slice(0, 6000);
           entry.extractedChars = entry.text.length;
         } catch { /* ignore */ }
@@ -319,15 +354,57 @@
     renderPending();
   });
 
+  // ---------- Voice input ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let listening = false;
+
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.title = 'Распознавание речи не поддерживается в этом браузере';
+  } else {
+    recognition = new SR();
+    recognition.lang = 'ru-RU';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    let base = '';
+    recognition.onresult = (e) => {
+      let transcript = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+      inputEl.value = (base ? base + ' ' : '') + transcript;
+      autoresize();
+    };
+    recognition.onend = () => {
+      listening = false;
+      micBtn.classList.remove('recording');
+    };
+    recognition.onerror = () => {
+      listening = false;
+      micBtn.classList.remove('recording');
+    };
+
+    micBtn.addEventListener('click', () => {
+      if (streaming) return;
+      if (listening) {
+        try { recognition.stop(); } catch {}
+        return;
+      }
+      base = inputEl.value.trim();
+      try {
+        recognition.start();
+        listening = true;
+        micBtn.classList.add('recording');
+      } catch { /* already running */ }
+    });
+  }
+
   // ---------- Send ----------
   async function sendMessage(text) {
     const prompt = (text || '').trim();
     if (!prompt && pending.length === 0) return;
     if (streaming) return;
 
-    // Keep chat history clean: messages carry only the pure question/answer
-    // text so server-side RAG searches on a focused query. Attachments go
-    // alongside as a separate payload for the current turn only.
     const docAttachments = pending.filter(p => p.kind !== 'image' && p.text);
     const imgAttachments = pending.filter(p => p.kind === 'image' && p.dataUrl);
     const otherAttachments = pending.filter(p => p.kind !== 'image' && !p.text);
@@ -399,15 +476,12 @@
       }
 
       cursor.remove();
-      if (botText) {
-        botEl.innerHTML = renderMarkdown(botText);
-      } else {
-        botEl.textContent = '(пустой ответ)';
-      }
+      if (botText) botEl.innerHTML = renderMarkdown(botText);
+      else botEl.textContent = '(пустой ответ)';
       messages.push({ role: 'assistant', content: botText });
     } catch (e) {
       cursor.remove();
-      botEl.remove();
+      botEl.parentElement?.remove();
       appendBotMsg(`Ошибка: ${e.message || e}`, { error: true });
       messages.pop();
     } finally {
@@ -416,23 +490,22 @@
     }
   }
 
+  function clearChat() {
+    if (streaming) return;
+    messages = [];
+    pending = [];
+    renderPending();
+    renderWelcome();
+    inputEl.focus();
+  }
+
   formEl.addEventListener('submit', (e) => { e.preventDefault(); sendMessage(inputEl.value); });
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(inputEl.value); }
   });
   inputEl.addEventListener('input', autoresize);
 
-  clearEl.addEventListener('click', () => {
-    if (streaming) return;
-    messages = [];
-    attachmentsByMsg = {};
-    pending = [];
-    renderPending();
-    renderEmptyState();
-    inputEl.focus();
-  });
-
-  renderEmptyState();
+  renderWelcome();
   inputEl.focus();
 
   // ---------- KB upload ----------
@@ -461,11 +534,8 @@
     try {
       const text = await extractText(f);
       textEl.value = (text || '').slice(0, 300000);
-      if (!textEl.value) {
-        setStatus(`Файл ${f.name} не содержит распознанного текста. Вставьте вручную или выберите другой.`, 'error');
-      } else {
-        setStatus(`Извлечено ${text.length.toLocaleString('ru')} символов. Нажмите «Загрузить в базу».`, 'success');
-      }
+      if (!textEl.value) setStatus(`Файл ${f.name} не содержит распознанного текста.`, 'error');
+      else setStatus(`Извлечено ${text.length.toLocaleString('ru')} символов.`, 'success');
     } catch (e) {
       setStatus('Ошибка: ' + (e.message || e), 'error');
     }
@@ -491,7 +561,7 @@
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setStatus(`Готово. Добавлено: ${j.chunks} фрагментов (ID ${j.kb_id}).`, 'success');
+      setStatus(`Готово. Добавлено ${j.chunks} фрагментов (ID ${j.kb_id}).`, 'success');
       titleEl.value = '';
       textEl.value = '';
       fileEl.value = '';
@@ -528,7 +598,7 @@
   reindexBtn.addEventListener('click', async () => {
     const token = tokenEl.value.trim();
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
-    if (!confirm('Перестроить индекс по всем записям knowledge_base? Может занять несколько минут.')) return;
+    if (!confirm('Перестроить индекс по всем записям knowledge_base?')) return;
     try { localStorage.setItem('ai-kb-admin', token); } catch {}
     reindexBtn.disabled = true;
     let afterId = 0;
@@ -539,7 +609,7 @@
 
     try {
       outer: while (true) {
-        setStatus(`Переиндексирую: записей обработано ${rowsDone}, фрагментов ${totalChunks}…`, 'info');
+        setStatus(`Переиндексирую: записей ${rowsDone}, фрагментов ${totalChunks}…`, 'info');
         let j;
         let lastErr;
         for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
@@ -550,23 +620,14 @@
             lastErr = e;
             const transient = !e.status || e.status >= 500 || e.status === 429;
             if (!transient || attempt === RETRY_DELAYS.length) break;
-            const delay = RETRY_DELAYS[attempt];
-            setStatus(`Временная ошибка (${e.message?.slice(0, 120)}), повтор через ${delay / 1000}с…`, 'info');
-            await new Promise(r => setTimeout(r, delay));
+            await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
           }
         }
         if (!j) {
-          // Skip this chunk window to make forward progress instead of
-          // getting stuck on one bad record.
-          setStatus(`Пропускаю проблемный фрагмент (after_id=${afterId}, chunk_from=${chunkFrom}): ${lastErr?.message || 'неизвестная ошибка'}`, 'error');
+          setStatus(`Пропускаю (after_id=${afterId}, chunk_from=${chunkFrom}): ${lastErr?.message || 'ошибка'}`, 'error');
           await new Promise(r => setTimeout(r, 1200));
-          if (chunkFrom > 0) {
-            // skip rest of current row
-            chunkFrom = 0;
-          } else {
-            // couldn't even start this row, advance past it
-            afterId += 1;
-          }
+          if (chunkFrom > 0) chunkFrom = 0;
+          else afterId += 1;
           continue outer;
         }
         totalChunks += j.indexed || 0;
@@ -578,7 +639,7 @@
       setStatus(`Готово. Проиндексировано ${totalChunks} фрагментов.`, 'success');
       loadStats();
     } catch (e) {
-      setStatus(`Прервано (after_id=${afterId}, chunk_from=${chunkFrom}): ${e.message || e}`, 'error');
+      setStatus(`Прервано: ${e.message || e}`, 'error');
     } finally {
       reindexBtn.disabled = false;
     }
