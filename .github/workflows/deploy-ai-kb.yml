@@ -75,26 +75,82 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for Cloudflare native CI to finish
-        if: steps.check.outputs.redeploy == 'true' && github.event_name == 'push'
-        # Native CI usually wraps up within 60–90s after push; pad to 150s.
-        run: sleep 150
-
-      - name: Deploy via Wrangler from ai-kb/
+      - name: Install wrangler
         if: steps.check.outputs.redeploy == 'true'
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: 84cbacc4816c29c294101ec57a0bea5d
-          workingDirectory: 'ai-kb'
-          wranglerVersion: '4.83.0'
+        run: npm i -g wrangler@4.83.0
 
-      - name: Smoke check
+      - name: Deploy and win the race against Cloudflare native CI
+        if: steps.check.outputs.redeploy == 'true'
+        working-directory: ai-kb
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 84cbacc4816c29c294101ec57a0bea5d
+          EXPECTED_TITLE: '<title>Бот Эверест</title>'
+        run: |
+          set -eo pipefail
+          # Safety net against any straggler Cloudflare auto-deploy: deploy,
+          # wait, verify, and redeploy if the title isn't ours. Backoff is
+          # 30/60/90/120/150/180s (covers up to the ~5-min native CI window
+          # plus a long stability tail).
+          attempt=0
+          max_attempts=6
+          stable=false
+          fetch_title() {
+            # Wrap curl in a helper that distinguishes real failures from
+            # "deploy is wrong". Return: 0 if fetched, 1 if curl failed.
+            local out
+            if out=$(curl -sf --max-time 15 https://ai-kb.35ewerest.workers.dev/); then
+              echo "$out" | grep -oE '<title>[^<]+</title>' | head -1
+              return 0
+            fi
+            return 1
+          }
+
+          while [ "$attempt" -lt "$max_attempts" ]; do
+            attempt=$((attempt+1))
+            echo "::group::Attempt $attempt — wrangler deploy"
+            wrangler deploy
+            echo "::endgroup::"
+
+            settle=$((attempt * 30))
+            echo "settling for ${settle}s before verify"
+            sleep "$settle"
+
+            if ! title=$(fetch_title); then
+              echo "curl failed during post-settle verify — retrying deploy after a short backoff"
+              sleep 15
+              continue
+            fi
+            echo "post-settle title: $title"
+            if [[ "$title" != "$EXPECTED_TITLE" ]]; then
+              echo "worker was overwritten, redeploying…"
+              continue
+            fi
+
+            # Stability re-check: wait another 120s (longer than any observed
+            # clobber window) to confirm the deploy sticks.
+            sleep 120
+            if ! title2=$(fetch_title); then
+              echo "curl failed during stability check — treat as unstable, redeploy"
+              continue
+            fi
+            echo "stability check title: $title2"
+            if [[ "$title2" == "$EXPECTED_TITLE" ]]; then
+              stable=true
+              break
+            fi
+            echo "deploy didn't stick after 120s, retrying…"
+          done
+
+          if [[ "$stable" != "true" ]]; then
+            echo "::error::Could not win the race after $max_attempts attempts"
+            exit 1
+          fi
+          echo "ai-kb is stable after $attempt attempt(s)"
+
+      - name: Final smoke check (api/health)
         if: steps.check.outputs.redeploy == 'true'
         run: |
-          sleep 8
           body=$(curl -sf https://ai-kb.35ewerest.workers.dev/api/health)
           echo "$body"
           echo "$body" | grep -q 'llama-3.3-70b' || { echo "::error::health did not report llama-3.3-70b"; exit 1; }
-          html=$(curl -sf https://ai-kb.35ewerest.workers.dev/)
-          echo "$html" | grep -q '<title>Бот Эверест</title>' || { echo "::error::root did not return Бот Эверест"; exit 1; }
