@@ -1,14 +1,89 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#FFFFFF">
-<title>AI Assistent — ТД Эверест</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>AI KB — ТД Эверест</title>
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-<p>See deployed version at https://ai-kb.35ewerest.workers.dev</p>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-title">AI Knowledge Base</div>
+      <div class="brand-sub">ТД «Эверест» — подшипники</div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="chat">Чат</button>
+      <button class="tab" data-tab="upload">База знаний</button>
+    </nav>
+    <div class="stats" id="stats" title="Состояние базы">...</div>
+  </header>
+
+  <main id="view-chat" class="view active">
+    <div id="chat" class="chat" aria-live="polite"></div>
+    <div class="composer">
+      <form id="form" class="form">
+        <textarea
+          id="input"
+          class="input"
+          rows="1"
+          placeholder="Напишите вопрос… (Enter — отправить, Shift+Enter — перенос)"
+          autocomplete="off"
+          required
+        ></textarea>
+        <button id="send" class="send-btn" type="submit">Отправить</button>
+      </form>
+      <div class="composer-row">
+        <button id="clear-btn" type="button" class="link-btn">Очистить чат</button>
+        <div class="hint">RAG по каталогу (FTS) + базе знаний (Vectorize). История — только в памяти.</div>
+      </div>
+    </div>
+  </main>
+
+  <main id="view-upload" class="view">
+    <section class="upload-box">
+      <h2>Добавить документ в базу знаний</h2>
+      <p class="muted">Поддержка: PDF, DOCX, TXT, MD. Текст извлекается в браузере, затем чанкуется и индексируется в Vectorize.</p>
+
+      <label class="field">
+        <span>Заголовок</span>
+        <input id="doc-title" type="text" placeholder="Например: ГОСТ 520-2011 — допуски и посадки" />
+      </label>
+
+      <label class="field">
+        <span>Категория</span>
+        <select id="doc-category">
+          <option value="gost">ГОСТ / стандарт</option>
+          <option value="manual">Инструкция / мануал</option>
+          <option value="docs" selected>Документация</option>
+          <option value="faq">FAQ / вопросы</option>
+          <option value="other">Другое</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Токен администратора</span>
+        <input id="admin-token" type="password" placeholder="X-Admin-Token" autocomplete="current-password" />
+      </label>
+
+      <label class="field">
+        <span>Файл или текст</span>
+        <input id="doc-file" type="file" accept=".pdf,.docx,.txt,.md,text/plain" />
+        <textarea id="doc-text" rows="8" placeholder="…или вставьте текст вручную"></textarea>
+      </label>
+
+      <div class="upload-actions">
+        <button id="upload-btn" type="button" class="send-btn">Загрузить в базу</button>
+        <button id="reindex-btn" type="button" class="link-btn" title="Перестроить Vectorize по всем записям knowledge_base">Переиндексировать всю базу</button>
+      </div>
+
+      <div id="upload-status" class="upload-status" hidden></div>
+    </section>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

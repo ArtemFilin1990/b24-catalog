@@ -1,7 +1,6 @@
-[main]
 name = "ai-kb"
 main = "src/index.js"
-compatibility_date = "2025-04-01"
+compatibility_date = "2026-04-17"
 account_id = "84cbacc4816c29c294101ec57a0bea5d"
 
 [ai]
@@ -16,6 +15,14 @@ database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
 binding = "CATALOG"
 bucket_name = "vedro"
 
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ai-kb-index"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
