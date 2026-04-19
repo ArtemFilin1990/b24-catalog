@@ -27,18 +27,22 @@
 
   // ---------- Sidebar toggle (mobile) ----------
   function toggleSidebar(open) {
+    if (!sidebar) return;
     const next = typeof open === 'boolean' ? open : !sidebar.classList.contains('open');
     sidebar.classList.toggle('open', next);
     shell?.classList.toggle('sidebar-open', next);
   }
   sidebarToggle?.addEventListener('click', (e) => { e.stopPropagation(); toggleSidebar(); });
   document.addEventListener('click', (e) => {
-    if (!sidebar.classList.contains('open')) return;
-    if (sidebar.contains(e.target) || sidebarToggle.contains(e.target)) return;
+    if (!sidebar || !sidebar.classList.contains('open')) return;
+    if (sidebar.contains(e.target) || (sidebarToggle && sidebarToggle.contains(e.target))) return;
     toggleSidebar(false);
   });
 
-  $('#settings-btn')?.addEventListener('click', () => showView('upload'));
+  $('#settings-btn')?.addEventListener('click', () => {
+    toggleSidebar(false);
+    showView('upload');
+  });
 
   // ---------- Menu sheet ----------
   const menuBtn = $('#menu-btn');
