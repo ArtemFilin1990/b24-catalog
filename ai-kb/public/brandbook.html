@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Бот Эверест — Брендбук</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --brand: #E94F31;
+      --brand-soft: #F9EDE9;
+      --paper: #F4F4F4;
+      --grey: #E2E2E2;
+      --ink: #1a1a1a;
+      --muted: #8a8a8a;
+      --card: #ffffff;
+      --user: #8B95A2;
+      --bot: #E6E7EA;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 40px;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 40px;
+      min-height: 100vh;
+    }
+
+    /* ---------- Left panel ---------- */
+    .panel { display: flex; flex-direction: column; gap: 28px; }
+
+    .title h1 {
+      font-weight: 700;
+      font-size: 44px;
+      letter-spacing: -0.02em;
+      margin: 0 0 4px;
+    }
+    .title p {
+      color: var(--muted);
+      font-size: 20px;
+      margin: 0;
+    }
+
+    .section {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 22px 24px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+
+    .section h2 {
+      font-weight: 700;
+      font-size: 18px;
+      margin: 0 0 16px;
+    }
+
+    /* Colors */
+    .colors {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .swatch {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .swatch-dot {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .swatch-dot.b1 { background: var(--brand); }
+    .swatch-dot.b2 { background: #ffffff; border: 1px solid var(--grey); }
+    .swatch-dot.b3 { background: var(--grey); }
+    .swatch code {
+      font-family: "Inter", monospace;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink);
+    }
+    .colors-note {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 14px;
+    }
+
+    /* Icons */
+    .icons {
+      display: flex;
+      gap: 14px;
+    }
+    .icon {
+      width: 58px;
+      height: 58px;
+      border-radius: 14px;
+      background: var(--brand);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 10px rgba(233,79,49,0.25);
+    }
+    .icon svg { width: 26px; height: 26px; }
+
+    /* Fonts */
+    .fonts-names {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 18px;
+    }
+    .font-row {
+      font-size: 22px;
+    }
+    .font-row strong { font-weight: 700; }
+    .font-row span { color: var(--muted); font-weight: 400; }
+
+    .font-sample {
+      font-size: 22px;
+      letter-spacing: 0.08em;
+      margin: 6px 0;
+    }
+    .font-digits {
+      font-size: 22px;
+      letter-spacing: 0.12em;
+      margin-top: 8px;
+    }
+
+    /* ---------- Right panel ---------- */
+    .stage {
+      background: linear-gradient(135deg, #F7F5F2 0%, #ECEBE8 100%);
+      border-radius: 28px;
+      padding: 40px 48px;
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(220px, 340px) 1fr;
+      gap: 40px;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .logo-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      text-align: center;
+    }
+    .logo-badge {
+      width: 130px;
+      height: 130px;
+      border-radius: 32px;
+      background: var(--brand);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 30px rgba(233,79,49,0.3);
+    }
+    .logo-badge svg { width: 82px; height: 82px; }
+    .logo-card h3 {
+      margin: 0;
+      font-weight: 700;
+      font-size: 28px;
+      letter-spacing: -0.01em;
+    }
+    .logo-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 220px;
+    }
+
+    /* ---------- Phone mockup ---------- */
+    .phone-wrap {
+      display: flex;
+      justify-content: center;
+      position: relative;
+      padding: 10px 0;
+    }
+
+    .phone {
+      width: 320px;
+      height: 640px;
+      border-radius: 46px;
+      background: #1f1f22;
+      padding: 12px;
+      box-shadow:
+        0 30px 60px rgba(0,0,0,0.25),
+        0 8px 20px rgba(0,0,0,0.18),
+        inset 0 0 0 1px rgba(255,255,255,0.04);
+      transform: perspective(1400px) rotateY(-18deg) rotateX(6deg) rotate(-2deg);
+      transform-origin: center;
+    }
+
+    .phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 36px;
+      background: #fff;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .phone-notch {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 110px;
+      height: 22px;
+      background: #1f1f22;
+      border-radius: 0 0 16px 16px;
+      z-index: 2;
+    }
+
+    .phone-statusbar {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 22px 0;
+      font-size: 11px;
+      color: #fff;
+      position: relative;
+      z-index: 1;
+    }
+
+    .phone-header {
+      background: var(--brand);
+      color: #fff;
+      padding: 8px 18px 18px;
+      border-radius: 0 0 20px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      position: relative;
+    }
+
+    .phone-header .small-logo {
+      width: 38px;
+      height: 38px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+    .phone-header .small-logo svg { width: 20px; height: 20px; color: #fff; }
+    .phone-header h4 { font-size: 14px; font-weight: 600; margin: 0; }
+    .phone-header .sub { font-size: 10px; opacity: 0.85; }
+
+    .phone-chat {
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #F4F4F4;
+      overflow: hidden;
+    }
+
+    .phone-row { display: flex; gap: 6px; align-items: flex-end; }
+    .phone-row.user { justify-content: flex-end; }
+    .phone-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .phone-avatar svg { width: 14px; height: 14px; }
+    .bubble {
+      max-width: 75%;
+      padding: 8px 12px;
+      border-radius: 14px;
+      font-size: 12px;
+      line-height: 1.35;
+      word-wrap: break-word;
+    }
+    .bubble.bot { background: var(--bot); color: var(--ink); border-bottom-left-radius: 4px; }
+    .bubble.user { background: var(--user); color: #fff; border-bottom-right-radius: 4px; }
+    .bubble strong { font-weight: 600; }
+
+    .phone-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .phone-chip {
+      background: rgba(0,0,0,0.05);
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 10px;
+    }
+
+    .phone-composer {
+      padding: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #fff;
+      border-top: 1px solid rgba(0,0,0,0.05);
+    }
+    .phone-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      box-shadow: 0 2px 6px rgba(233,79,49,0.28);
+    }
+    .phone-btn svg { width: 14px; height: 14px; }
+    .phone-input {
+      flex: 1;
+      background: #F4F4F4;
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 11px;
+      color: #999;
+    }
+
+    @media (max-width: 980px) {
+      .page { grid-template-columns: 1fr; padding: 24px; }
+      .stage { grid-template-columns: 1fr; gap: 24px; padding: 28px; }
+      .phone { transform: none; }
+    }
+
+    @media (max-width: 520px) {
+      .phone { width: 260px; height: 520px; }
+      .title h1 { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <!-- LEFT PANEL ------------------------------------------------ -->
+    <aside class="panel">
+      <div class="title">
+        <h1>Бот Эверест</h1>
+        <p>Брендбук</p>
+      </div>
+
+      <section class="section">
+        <h2>Цветовая палитра</h2>
+        <div class="colors">
+          <div class="swatch"><div class="swatch-dot b1"></div><code>#E94F31</code></div>
+          <div class="swatch"><div class="swatch-dot b2"></div><code>#F4F4F4</code></div>
+          <div class="swatch"><div class="swatch-dot b3"></div><code>#E2E2E2</code></div>
+        </div>
+        <div class="colors-note">Основные цвета бренда</div>
+      </section>
+
+      <section class="section">
+        <h2>Иконки</h2>
+        <div class="icons">
+          <div class="icon" title="Прикрепить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.58 8.58a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></div>
+          <div class="icon" title="База знаний"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14zM4 19.5V21h14"/></svg></div>
+          <div class="icon" title="Микрофон"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+          <div class="icon" title="Отправить"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 4v16l15-8z"/></svg></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Шрифты</h2>
+        <div class="fonts-names">
+          <div class="font-row"><strong>Inter</strong> <span>Bold</span></div>
+          <div class="font-row"><strong style="font-weight:400">Inter</strong> <span>Regular</span></div>
+        </div>
+        <div class="font-sample">АБВГДЕЁЖЗИЙКЛМНОП</div>
+        <div class="font-sample">РСТУФХЦЧШЩЪЫЬЭЮЯ</div>
+        <div class="font-digits">0123456789</div>
+      </section>
+    </aside>
+
+    <!-- RIGHT PANEL ----------------------------------------------- -->
+    <section class="stage">
+      <div class="logo-card">
+        <div class="logo-badge">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="24" cy="24" r="20"/>
+            <path d="M8 30 L18 18 L23 24 L31 14 L40 30 Z" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <h3>Бот Эверест</h3>
+        <p>Круглый логотип с горой, оранжевый цвет</p>
+      </div>
+
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="phone-notch"></div>
+            <div class="phone-header">
+              <div style="width:100%; display:flex; justify-content:space-between; padding:0 4px; font-size:10px; opacity:0.85;">
+                <span>14:15</span>
+                <span>5G ⚡</span>
+              </div>
+              <div class="small-logo">
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="24" cy="24" r="20"/>
+                  <path d="M8 30 L18 18 L23 24 L31 14 L40 30 Z" fill="currentColor" stroke="none"/>
+                </svg>
+              </div>
+              <h4>Бот Эверест</h4>
+              <div class="sub">В сети</div>
+            </div>
+
+            <div class="phone-chat">
+              <div class="phone-row">
+                <div class="phone-avatar">
+                  <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="24" cy="24" r="20"/>
+                    <path d="M8 30 L18 18 L23 24 L31 14 L40 30 Z" fill="currentColor" stroke="none"/>
+                  </svg>
+                </div>
+                <div class="bubble bot">
+                  Здравствуйте! Я <strong>Бот Эверест</strong>. Подберу подшипник, расшифрую маркировку.
+                  <div class="phone-chips">
+                    <span class="phone-chip">6205 2RS</span>
+                    <span class="phone-chip">NU205</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="phone-row user">
+                <div class="bubble user">Аналог для 6205 2RS C3</div>
+              </div>
+
+              <div class="phone-row">
+                <div class="phone-avatar">
+                  <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="24" cy="24" r="20"/>
+                    <path d="M8 30 L18 18 L23 24 L31 14 L40 30 Z" fill="currentColor" stroke="none"/>
+                  </svg>
+                </div>
+                <div class="bubble bot">180205 ↔ 6205-2RS C3. Размеры 25×52×15 мм, статус <strong>ПОДТВЕРЖДЕНО</strong>.</div>
+              </div>
+            </div>
+
+            <div class="phone-composer">
+              <div class="phone-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.58 8.58a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="phone-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              </div>
+              <div class="phone-input">Написать сообщение…</div>
+              <div class="phone-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 4v16l15-8z"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
