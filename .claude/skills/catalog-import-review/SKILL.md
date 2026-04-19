@@ -23,3 +23,10 @@ Output:
 - Non-blocking issues
 - Exact migration/order impact
 - Merge recommendation
+
+References:
+- references/import-checklist.md
+- references/view-safety-rules.md
+
+Scripts:
+- scripts/review_catalog_sql.sh
