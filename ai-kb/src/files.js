@@ -6,7 +6,12 @@
 // R2 key layout: ai-kb/files/<sha256>
 
 const R2_PREFIX = 'ai-kb/files/';
-const MAX_UPLOAD_BYTES = 95_000_000; // stay under CF Worker 100MB request cap
+// Workers have a 128 MB memory ceiling per request, and request.arrayBuffer()
+// materializes the full body in memory on top of R2/D1 client overhead and
+// the SHA-256 digest working buffer. 25 MB is a safe ceiling for a standard
+// Worker; larger uploads need streaming or a multipart/presigned-URL flow
+// which is tracked in the P1 follow-up issue.
+const MAX_UPLOAD_BYTES = 25_000_000;
 const MAX_LIST_LIMIT = 200;
 
 // ---- source_type enum (must match CHECK in 0002 migration) ----
@@ -61,6 +66,14 @@ function isMigrationMissing(err) {
   return msg.includes('no such table') || msg.includes('no such column');
 }
 
+// SQLite reports UNIQUE violations with code SQLITE_CONSTRAINT_UNIQUE; D1
+// surfaces this in the message.
+function isUniqueViolation(err) {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('unique constraint') || msg.includes('constraint failed')
+      || msg.includes('sqlite_constraint_unique');
+}
+
 function migrationError(res) {
   return res.jsonErr(
     'Migration 0002_files_rules_catalog.sql is not applied. Run: wrangler d1 execute baza --remote --file ai-kb/migrations/0002_files_rules_catalog.sql',
@@ -102,24 +115,40 @@ export async function handleAdminFilesUpload(request, env, { jsonOk, jsonErr, re
   const r2Key = `${R2_PREFIX}${sha}`;
   const sourceType = detectSourceType(name, mime);
 
-  // SHA-based dedup: if we already have this file, return the existing row.
+  // SHA-based dedup. Matching rows can be in any status:
+  //   - non-deleted  → return the existing id as deduped
+  //   - soft-deleted → "resurrect" back to 'stored' and return as deduped
+  // This covers the UNIQUE(r2_key) constraint: soft-deleted rows still hold
+  // the key, so we must treat them as live instead of letting the later
+  // INSERT collide with them.
   let existing;
   try {
     existing = await env.DB
-      .prepare('SELECT id, r2_key, size_bytes FROM files WHERE sha256 = ? AND status != ? LIMIT 1')
-      .bind(sha, 'deleted')
+      .prepare('SELECT id, r2_key, size_bytes, status FROM files WHERE sha256 = ? LIMIT 1')
+      .bind(sha)
       .first();
   } catch (e) {
     if (isMigrationMissing(e)) return migrationError({ jsonErr });
     return jsonErr(`DB error: ${e.message}`, 500);
   }
   if (existing) {
+    if (existing.status === 'deleted') {
+      try {
+        await env.DB
+          .prepare("UPDATE files SET status = 'stored' WHERE id = ?")
+          .bind(existing.id)
+          .run();
+      } catch (e) {
+        return jsonErr(`DB update failed: ${e.message}`, 500);
+      }
+    }
     return jsonOk({
       file_id: existing.id,
       r2_key: existing.r2_key,
       sha256: sha,
       size_bytes: existing.size_bytes,
       deduped: true,
+      resurrected: existing.status === 'deleted',
     });
   }
 
@@ -143,9 +172,38 @@ export async function handleAdminFilesUpload(request, env, { jsonOk, jsonErr, re
       .bind(sourceType, name, mime, r2Key, sha, size, notes)
       .run();
   } catch (e) {
-    // Roll back the R2 put to avoid an orphan object.
+    if (isMigrationMissing(e)) {
+      // Our R2 put is orphaned because the table doesn't exist; safe to
+      // remove since no other row can reference it.
+      try { await env.CATALOG.delete(r2Key); } catch {}
+      return migrationError({ jsonErr });
+    }
+    if (isUniqueViolation(e)) {
+      // A concurrent upload of the same bytes won the race. The R2 object
+      // is shared — do NOT delete it, that would break the winning row.
+      // Fall back to returning that row as deduped.
+      let winner;
+      try {
+        winner = await env.DB
+          .prepare('SELECT id, r2_key, size_bytes FROM files WHERE sha256 = ? LIMIT 1')
+          .bind(sha)
+          .first();
+      } catch {}
+      if (winner) {
+        return jsonOk({
+          file_id: winner.id,
+          r2_key: winner.r2_key,
+          sha256: sha,
+          size_bytes: winner.size_bytes,
+          deduped: true,
+          race: true,
+        });
+      }
+      return jsonErr(`DB insert failed: ${e.message}`, 500);
+    }
+    // Any other DB failure: our R2 put is definitely orphan (no row points
+    // to it), remove it.
     try { await env.CATALOG.delete(r2Key); } catch {}
-    if (isMigrationMissing(e)) return migrationError({ jsonErr });
     return jsonErr(`DB insert failed: ${e.message}`, 500);
   }
 
@@ -233,12 +291,9 @@ export async function handleAdminFilesDelete(request, env, id, { jsonOk, jsonErr
   }
   if (!row) return jsonErr('not found', 404);
 
-  let r2Deleted = false;
-  if (hard) {
-    try { await env.CATALOG.delete(row.r2_key); r2Deleted = true; }
-    catch (e) { return jsonErr(`R2 delete failed: ${e.message}`, 502); }
-  }
-
+  // Update DB first, then best-effort R2 delete. If R2 fails we leave an
+  // orphan object (reconciled later by the cleanup cron), which is safer
+  // than a DB row pointing at a missing object.
   try {
     await env.DB
       .prepare("UPDATE files SET status = 'deleted' WHERE id = ?")
@@ -248,7 +303,19 @@ export async function handleAdminFilesDelete(request, env, id, { jsonOk, jsonErr
     return jsonErr(`DB update failed: ${e.message}`, 500);
   }
 
-  return jsonOk({ file_id: fileId, soft: !hard, r2_deleted: r2Deleted });
+  let r2Deleted = false;
+  let r2DeleteError = null;
+  if (hard) {
+    try { await env.CATALOG.delete(row.r2_key); r2Deleted = true; }
+    catch (e) { r2DeleteError = e.message; }
+  }
+
+  return jsonOk({
+    file_id: fileId,
+    soft: !hard,
+    r2_deleted: r2Deleted,
+    r2_delete_error: r2DeleteError,
+  });
 }
 
 // ============================================================
