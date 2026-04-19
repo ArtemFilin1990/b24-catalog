@@ -75,26 +75,65 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for Cloudflare native CI to finish
-        if: steps.check.outputs.redeploy == 'true' && github.event_name == 'push'
-        # Native CI usually wraps up within 60–90s after push; pad to 150s.
-        run: sleep 150
-
-      - name: Deploy via Wrangler from ai-kb/
+      - name: Install wrangler
         if: steps.check.outputs.redeploy == 'true'
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: 84cbacc4816c29c294101ec57a0bea5d
-          workingDirectory: 'ai-kb'
-          wranglerVersion: '4.83.0'
+        run: npm i -g wrangler@4.83.0
 
-      - name: Smoke check
+      - name: Deploy and win the race against Cloudflare native CI
+        if: steps.check.outputs.redeploy == 'true'
+        working-directory: ai-kb
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 84cbacc4816c29c294101ec57a0bea5d
+          EXPECTED_TITLE: '<title>Бот Эверест</title>'
+        run: |
+          set -e
+          # Cloudflare's native Git integration triggers its own build
+          # on every push and that build finishes somewhere between
+          # 1.5 and 5 minutes in. We deploy, wait, verify, and redeploy
+          # until our build stays. Up to 6 attempts with growing waits.
+          attempt=0
+          max_attempts=6
+          stable=false
+          while [ "$attempt" -lt "$max_attempts" ]; do
+            attempt=$((attempt+1))
+            echo "::group::Attempt $attempt — wrangler deploy"
+            wrangler deploy
+            echo "::endgroup::"
+
+            # Wait for CF edge to propagate AND for any native CI that's
+            # still running to finish overwriting us.
+            settle=$((30 + attempt * 30))
+            echo "settling for ${settle}s before verify"
+            sleep "$settle"
+
+            title=$(curl -sf https://ai-kb.35ewerest.workers.dev/ 2>/dev/null | grep -oE '<title>[^<]+</title>' | head -1 || true)
+            echo "post-settle title: $title"
+            if [[ "$title" != "$EXPECTED_TITLE" ]]; then
+              echo "worker was overwritten by native CI, retrying…"
+              continue
+            fi
+
+            # Double-check: wait another 60s to ensure the deploy sticks.
+            sleep 60
+            title2=$(curl -sf https://ai-kb.35ewerest.workers.dev/ 2>/dev/null | grep -oE '<title>[^<]+</title>' | head -1 || true)
+            echo "stability check title: $title2"
+            if [[ "$title2" == "$EXPECTED_TITLE" ]]; then
+              stable=true
+              break
+            fi
+            echo "deploy didn't stick after 60s, retrying…"
+          done
+
+          if [[ "$stable" != "true" ]]; then
+            echo "::error::Could not win the race against Cloudflare native CI after $max_attempts attempts"
+            exit 1
+          fi
+          echo "ai-kb is stable after $attempt attempts"
+
+      - name: Final smoke check (api/health)
         if: steps.check.outputs.redeploy == 'true'
         run: |
-          sleep 8
           body=$(curl -sf https://ai-kb.35ewerest.workers.dev/api/health)
           echo "$body"
           echo "$body" | grep -q 'llama-3.3-70b' || { echo "::error::health did not report llama-3.3-70b"; exit 1; }
-          html=$(curl -sf https://ai-kb.35ewerest.workers.dev/)
-          echo "$html" | grep -q '<title>Бот Эверест</title>' || { echo "::error::root did not return Бот Эверест"; exit 1; }
