@@ -2,6 +2,13 @@
 // Worker: AI-ассистент по базе знаний ТД «Эверест»
 // D1: baza | R2: vedro | Vectorize: ai-kb-index | AI: Workers AI
 
+import {
+  handleAdminFilesUpload,
+  handleAdminFilesList,
+  handleAdminFilesDelete,
+  handleAdminStorageStats,
+} from './files.js';
+
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
@@ -728,6 +735,15 @@ export default {
     // Settings (admin-editable bot prompt + tuning params)
     if (path === '/api/settings' && method === 'GET')  return handleGetSettings(env);
     if (path === '/api/settings' && method === 'POST') return handleSetSettings(request, env);
+
+    // Admin: file registry (uploads originals to R2, metadata in D1).
+    // Needs migration 0002_files_rules_catalog.sql.
+    const helpers = { jsonOk, jsonErr, requireAdmin };
+    if (path === '/api/admin/files/upload' && method === 'POST') return handleAdminFilesUpload(request, env, helpers);
+    if (path === '/api/admin/files'        && method === 'GET')  return handleAdminFilesList(request, env, helpers);
+    if (path === '/api/admin/storage/stats' && method === 'GET') return handleAdminStorageStats(request, env, helpers);
+    const fileDel = path.match(/^\/api\/admin\/files\/(\d+)$/);
+    if (fileDel && method === 'DELETE') return handleAdminFilesDelete(request, env, fileDel[1], helpers);
 
     // Sessions + messages
     if (path === '/api/sessions' || path.startsWith('/api/sessions/')) return handleSessions(request, env);
