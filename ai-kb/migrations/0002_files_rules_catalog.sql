@@ -2,10 +2,23 @@
 -- Миграция 0002: файлы, правила, FTS-индекс каталога
 -- Worker: ai-kb + b24-catalog | D1: baza
 --
+-- Зависимости (должны быть применены до этой миграции):
+--   migrations/0001_root_schema.sql    — создаёт таблицы catalog,
+--     import_sessions, orders, admin_audit_log, schema_migrations
+--   ai-kb/migrations/0001_initial.sql  — создаёт knowledge_base,
+--     chat_sessions, chat_messages, query_log
+--
 -- Применение:
 --   wrangler d1 execute baza --remote --file ai-kb/migrations/0002_files_rules_catalog.sql
 -- Миграция идемпотентна (IF NOT EXISTS).
+--
+-- Примечание по внешним ключам: Cloudflare D1 поддерживает FK,
+-- но не включает их принудительную проверку автоматически.
+-- Для включения добавьте PRAGMA foreign_keys = ON; в начало
+-- каждого сеанса соединения или выполните команду ниже.
 -- ============================================================
+
+PRAGMA foreign_keys = ON;
 
 -- ============================================================
 -- Настройки ai-kb (KV-хранилище в D1, ранее создавалось лениво)
@@ -124,11 +137,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
   content_rowid='id'
 );
 
--- Первичное наполнение FTS (выполняется один раз; повторный запуск
--- безопасен — INSERT OR IGNORE не трогает существующие строки, а
--- 'delete' триггер ниже исключает дубли при rebuild).
-INSERT OR IGNORE INTO catalog_fts (rowid, base_number, gost_equiv, iso_equiv, brand)
-SELECT id, base_number, gost_equiv, iso_equiv, brand FROM catalog;
+-- Первичное наполнение FTS (требует, чтобы таблица catalog уже
+-- существовала — она создаётся в migrations/0001_root_schema.sql).
+-- Если catalog пустой, запрос вернёт 0 строк — это безопасно.
+-- При повторном запуске migration-строки дублируются в FTS-индексе;
+-- для пересборки используйте: INSERT INTO catalog_fts(catalog_fts) VALUES('rebuild');
+INSERT INTO catalog_fts (rowid, base_number, gost_equiv, iso_equiv, brand)
+SELECT id, base_number, gost_equiv, iso_equiv, brand FROM catalog
+WHERE NOT EXISTS (SELECT 1 FROM catalog_fts LIMIT 1);
 
 -- Триггеры синхронизации FTS ↔ catalog
 CREATE TRIGGER IF NOT EXISTS catalog_fts_insert

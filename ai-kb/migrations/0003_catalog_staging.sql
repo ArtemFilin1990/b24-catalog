@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS catalog_staging (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
 
   -- Источник загрузки
-  session_id      TEXT    NOT NULL,                -- import_sessions.id
+  session_id      TEXT    NOT NULL,                -- логическая ссылка на import_sessions.id (FK не проверяется D1 без PRAGMA foreign_keys=ON)
   uploaded_by     TEXT,
   imported_at     TEXT    NOT NULL DEFAULT (datetime('now')),
 
