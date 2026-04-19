@@ -574,6 +574,94 @@
     statusEl.textContent = msg || '';
   }
 
+  // ---------- Settings (prompt + params) ----------
+  const promptEl = $('#prompt-editor');
+  const promptSaveBtn = $('#prompt-save');
+  const promptResetBtn = $('#prompt-reset');
+  const promptStatus = $('#prompt-status');
+  const pTemp = $('#p-temp');
+  const pMaxTok = $('#p-maxtok');
+  const pCatK = $('#p-catk');
+  const pVecK = $('#p-veck');
+  const paramsSaveBtn = $('#params-save');
+  const paramsStatus = $('#params-status');
+
+  // Remember factory default for the reset button.
+  let factoryPrompt = '';
+  let settingsLoaded = false;
+
+  function setInline(el, msg, kind = '') {
+    if (!el) return;
+    el.textContent = msg || '';
+    el.hidden = !msg;
+    el.className = 'inline-status' + (kind ? ' ' + kind : '');
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      const j = await r.json();
+      if (!j.ok) return;
+      const s = j.settings || {};
+      const ov = s._overrides || {};
+      // Factory prompt = whatever comes back when no override is set.
+      if (!ov.system_prompt) factoryPrompt = s.system_prompt || factoryPrompt;
+      else if (!factoryPrompt) factoryPrompt = s.system_prompt || '';
+      if (promptEl) promptEl.value = s.system_prompt || '';
+      if (pTemp) pTemp.value = s.temperature || '';
+      if (pMaxTok) pMaxTok.value = s.max_tokens || '';
+      if (pCatK) pCatK.value = s.catalog_topk || '';
+      if (pVecK) pVecK.value = s.vector_topk || '';
+      settingsLoaded = true;
+    } catch { /* ignore */ }
+  }
+  loadSettings();
+
+  async function saveSettings(patch, statusEl) {
+    const token = tokenEl.value.trim();
+    if (!token) { setInline(statusEl, 'Введите токен администратора', 'error'); return false; }
+    try { localStorage.setItem('ai-kb-admin', token); } catch {}
+    setInline(statusEl, 'Сохраняю…');
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ settings: patch }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setInline(statusEl, 'Сохранено', 'success');
+      setTimeout(() => setInline(statusEl, ''), 2500);
+      return true;
+    } catch (e) {
+      setInline(statusEl, 'Ошибка: ' + (e.message || e), 'error');
+      return false;
+    }
+  }
+
+  promptSaveBtn?.addEventListener('click', () => {
+    const text = promptEl?.value?.trim() || '';
+    if (text.length < 20) { setInline(promptStatus, 'Промпт слишком короткий', 'error'); return; }
+    saveSettings({ system_prompt: text }, promptStatus);
+  });
+
+  promptResetBtn?.addEventListener('click', async () => {
+    if (!confirm('Сбросить промпт к заводскому?')) return;
+    if (await saveSettings({ system_prompt: '' }, promptStatus)) {
+      await loadSettings();
+    }
+  });
+
+  paramsSaveBtn?.addEventListener('click', () => {
+    const patch = {
+      temperature: pTemp?.value?.trim() || '',
+      max_tokens: pMaxTok?.value?.trim() || '',
+      catalog_topk: pCatK?.value?.trim() || '',
+      vector_topk: pVecK?.value?.trim() || '',
+    };
+    saveSettings(patch, paramsStatus);
+  });
+
   fileEl.addEventListener('change', async () => {
     const f = fileEl.files?.[0];
     if (!f) return;

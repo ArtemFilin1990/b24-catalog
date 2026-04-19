@@ -118,6 +118,85 @@ function requireAdmin(request, env) {
   return request.headers.get('X-Admin-Token') === expected;
 }
 
+// ============================================================
+// Settings (D1 key-value)
+// ============================================================
+const SETTING_KEYS = new Set([
+  'system_prompt',
+  'temperature',
+  'max_tokens',
+  'catalog_topk',
+  'vector_topk',
+]);
+
+async function ensureSettingsTable(env) {
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))'
+  ).run();
+}
+
+async function getSetting(env, key, fallback) {
+  try {
+    await ensureSettingsTable(env);
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
+    return row?.value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function setSetting(env, key, value) {
+  await ensureSettingsTable(env);
+  await env.DB
+    .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+    .bind(key, value)
+    .run();
+}
+
+async function deleteSetting(env, key) {
+  await ensureSettingsTable(env);
+  await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
+}
+
+async function handleGetSettings(env) {
+  await ensureSettingsTable(env);
+  const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+  const out = {
+    system_prompt: AI_SYSTEM,
+    temperature: String(0.2),
+    max_tokens: String(MAX_TOKENS),
+    catalog_topk: String(CATALOG_TOPK),
+    vector_topk: String(VECTOR_TOPK),
+    _overrides: {},
+  };
+  for (const r of results || []) {
+    if (SETTING_KEYS.has(r.key)) {
+      out[r.key] = r.value;
+      out._overrides[r.key] = { updated_at: r.updated_at };
+    }
+  }
+  return jsonOk({ settings: out });
+}
+
+async function handleSetSettings(request, env) {
+  if (!requireAdmin(request, env)) return jsonErr('Forbidden', 403);
+  let body;
+  try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+  const updates = body?.settings || {};
+  const saved = [];
+  for (const [k, v] of Object.entries(updates)) {
+    if (!SETTING_KEYS.has(k)) continue;
+    if (v == null || String(v).trim() === '') {
+      await deleteSetting(env, k);
+      saved.push({ key: k, cleared: true });
+    } else {
+      await setSetting(env, k, String(v).slice(0, 60000));
+      saved.push({ key: k, updated: true });
+    }
+  }
+  return jsonOk({ saved });
+}
+
 function sanitizeMessages(raw) {
   if (!Array.isArray(raw)) return null;
   return raw.slice(-MAX_HISTORY).reduce((acc, m) => {
@@ -312,9 +391,23 @@ async function handleChat(request, env) {
   const t0 = Date.now();
   const searchQuery = lastUser.content;
 
+  // Pull runtime overrides from the settings table (admin may have tuned
+  // them via the gear menu). Fall back to the compile-time constants.
+  const [sysPrompt, tempRaw, maxTokRaw, catalogKRaw, vectorKRaw] = await Promise.all([
+    getSetting(env, 'system_prompt', AI_SYSTEM),
+    getSetting(env, 'temperature', '0.2'),
+    getSetting(env, 'max_tokens', String(MAX_TOKENS)),
+    getSetting(env, 'catalog_topk', String(CATALOG_TOPK)),
+    getSetting(env, 'vector_topk', String(VECTOR_TOPK)),
+  ]);
+  const temperature = Math.max(0, Math.min(1.5, parseFloat(tempRaw) || 0.2));
+  const maxTokens = Math.max(64, Math.min(2000, parseInt(maxTokRaw, 10) || MAX_TOKENS));
+  const catalogTopK = Math.max(0, Math.min(20, parseInt(catalogKRaw, 10) || CATALOG_TOPK));
+  const vectorTopK = Math.max(0, Math.min(20, parseInt(vectorKRaw, 10) || VECTOR_TOPK));
+
   const [catalogRows, kbMatches] = await Promise.all([
-    searchCatalog(env, searchQuery).catch(() => []),
-    searchKnowledge(env, searchQuery).catch(() => []),
+    catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
+    vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
@@ -331,7 +424,7 @@ async function handleChat(request, env) {
   parts.push('Вопрос: ' + searchQuery);
 
   const aiMessages = [
-    { role: 'system', content: AI_SYSTEM },
+    { role: 'system', content: sysPrompt },
     ...messages.slice(0, -1),
     { role: 'user', content: parts.join('\n\n') },
   ];
@@ -342,8 +435,8 @@ async function handleChat(request, env) {
   try {
     stream = await env.AI.run(CHAT_MODEL, {
       messages: aiMessages,
-      max_tokens: MAX_TOKENS,
-      temperature: 0.2,
+      max_tokens: maxTokens,
+      temperature,
       stream: true,
     });
   } catch (e) {
@@ -614,6 +707,10 @@ export default {
     if (path === '/api/reindex'&& method === 'POST') return handleReindex(request, env);
     if (path === '/api/stats'  && method === 'GET')  return handleStats(env);
     if (path === '/api/health' && method === 'GET')  return jsonOk({ model: CHAT_MODEL, embed: EMBED_MODEL });
+
+    // Settings (admin-editable bot prompt + tuning params)
+    if (path === '/api/settings' && method === 'GET')  return handleGetSettings(env);
+    if (path === '/api/settings' && method === 'POST') return handleSetSettings(request, env);
 
     // Sessions + messages
     if (path === '/api/sessions' || path.startsWith('/api/sessions/')) return handleSessions(request, env);

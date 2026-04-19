@@ -117,51 +117,97 @@
       </main>
 
       <main id="view-upload" class="view">
-        <section class="upload-shell">
+        <section class="settings-shell">
           <button type="button" class="upload-back" id="kb-back">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M19 12H5M12 19l-7-7 7-7"/>
             </svg>
             Назад к чату
           </button>
-          <h2>База знаний</h2>
-          <p class="muted">Загрузите документ в любом формате. PDF и DOCX парсятся в браузере, остальные — как plain text. После индексации бот будет использовать их в ответах.</p>
-
-          <label class="field">
-            <span>Заголовок</span>
-            <input id="doc-title" type="text" placeholder="Например: ГОСТ 520-2011 — допуски и посадки" />
-          </label>
-
-          <label class="field">
-            <span>Категория</span>
-            <select id="doc-category">
-              <option value="gost">ГОСТ / стандарт</option>
-              <option value="manual">Инструкция / мануал</option>
-              <option value="docs" selected>Документация</option>
-              <option value="faq">FAQ / вопросы</option>
-              <option value="other">Другое</option>
-            </select>
-          </label>
+          <h2>Настройки бота</h2>
+          <p class="muted">Отредактируйте инструкции (системный промпт), параметры ответа и добавьте материалы в базу знаний. Все изменения применяются сразу после сохранения.</p>
 
           <label class="field">
             <span>Токен администратора</span>
-            <input id="admin-token" type="password" placeholder="X-Admin-Token" autocomplete="current-password" />
+            <input id="admin-token" type="password" placeholder="X-Admin-Token (обязателен для сохранения)" autocomplete="current-password" />
           </label>
 
-          <div class="field">
-            <span>Файл</span>
-            <div class="file-drop">
-              <input id="doc-file" type="file" />
+          <details class="settings-section" open>
+            <summary>Инструкции для бота (системный промпт)</summary>
+            <div class="section-body">
+              <p class="muted small">
+                Полный текст, который бот получает перед каждым ответом. Здесь задаётся тема, формат, правила и запреты.
+                Можно менять сколько угодно раз — новый промпт начнёт работать со следующего сообщения.
+              </p>
+              <textarea id="prompt-editor" rows="20" placeholder="Текст системного промпта…"></textarea>
+              <div class="row-actions">
+                <button id="prompt-save" type="button" class="primary-btn">Сохранить промпт</button>
+                <button id="prompt-reset" type="button" class="ghost-btn" title="Сбросить к встроенному по умолчанию">Сбросить к заводскому</button>
+                <span id="prompt-status" class="inline-status" hidden></span>
+              </div>
             </div>
-            <textarea id="doc-text" rows="10" placeholder="…или вставьте текст вручную"></textarea>
-          </div>
+          </details>
 
-          <div class="upload-actions">
-            <button id="upload-btn" type="button" class="primary-btn">Загрузить в базу</button>
-            <button id="reindex-btn" type="button" class="ghost-btn" title="Переиндексировать все записи knowledge_base">Переиндексировать</button>
-          </div>
+          <details class="settings-section">
+            <summary>Параметры ответа</summary>
+            <div class="section-body grid-2">
+              <label class="field">
+                <span>Температура (0.0–1.5)</span>
+                <input id="p-temp" type="number" step="0.05" min="0" max="1.5" placeholder="0.2" />
+              </label>
+              <label class="field">
+                <span>Max tokens (64–2000)</span>
+                <input id="p-maxtok" type="number" step="16" min="64" max="2000" placeholder="900" />
+              </label>
+              <label class="field">
+                <span>Каталог top-K (0–20)</span>
+                <input id="p-catk" type="number" step="1" min="0" max="20" placeholder="6" />
+              </label>
+              <label class="field">
+                <span>База знаний top-K (0–20)</span>
+                <input id="p-veck" type="number" step="1" min="0" max="20" placeholder="5" />
+              </label>
+              <div class="row-actions span-2">
+                <button id="params-save" type="button" class="primary-btn">Сохранить параметры</button>
+                <span id="params-status" class="inline-status" hidden></span>
+              </div>
+            </div>
+          </details>
 
-          <div id="upload-status" class="upload-status" hidden></div>
+          <details class="settings-section" id="kb-section">
+            <summary>База знаний — загрузка файлов</summary>
+            <div class="section-body">
+              <p class="muted small">
+                Поддерживаются любые форматы. PDF и DOCX парсятся в браузере, остальные — как plain text. После загрузки данные индексируются в Vectorize и используются ботом в ответах.
+              </p>
+              <label class="field">
+                <span>Заголовок</span>
+                <input id="doc-title" type="text" placeholder="Например: ГОСТ 520-2011 — допуски и посадки" />
+              </label>
+              <label class="field">
+                <span>Категория</span>
+                <select id="doc-category">
+                  <option value="gost">ГОСТ / стандарт</option>
+                  <option value="manual">Инструкция / мануал</option>
+                  <option value="docs" selected>Документация</option>
+                  <option value="faq">FAQ / вопросы</option>
+                  <option value="other">Другое</option>
+                </select>
+              </label>
+              <div class="field">
+                <span>Файл</span>
+                <div class="file-drop">
+                  <input id="doc-file" type="file" />
+                </div>
+                <textarea id="doc-text" rows="8" placeholder="…или вставьте текст вручную"></textarea>
+              </div>
+              <div class="row-actions">
+                <button id="upload-btn" type="button" class="primary-btn">Загрузить в базу</button>
+                <button id="reindex-btn" type="button" class="ghost-btn" title="Переиндексировать все записи knowledge_base">Переиндексировать</button>
+              </div>
+              <div id="upload-status" class="upload-status" hidden></div>
+            </div>
+          </details>
         </section>
       </main>
     </section>
