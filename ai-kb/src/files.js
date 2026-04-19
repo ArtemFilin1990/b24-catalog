@@ -59,6 +59,28 @@ async function sha256Hex(buf) {
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Audit writes share the `admin_audit_log` table owned by the root worker
+// (schema in migrations/0001_root_schema.sql): columns action, resource, meta,
+// ip, ua, created_at. The 0002 ai-kb migration defines a different shape of
+// the same table but IF NOT EXISTS keeps the earlier one; the prod truth is
+// the root schema. Follow-up PR will reconcile.
+//
+// Wrapped in try/catch so audit failures never fail the real request.
+async function audit(env, request, action, resource, meta) {
+  try {
+    await env.DB
+      .prepare('INSERT INTO admin_audit_log (action, resource, meta, ip, ua) VALUES (?, ?, ?, ?, ?)')
+      .bind(
+        String(action).slice(0, 80),
+        resource == null ? null : String(resource).slice(0, 200),
+        meta ? JSON.stringify(meta).slice(0, 2000) : null,
+        (request.headers.get('CF-Connecting-IP') || '').slice(0, 64) || null,
+        (request.headers.get('User-Agent') || '').slice(0, 200) || null,
+      )
+      .run();
+  } catch { /* audit must not break the request */ }
+}
+
 // Distinguish "the tables aren't there yet" from real bugs so the operator
 // gets an actionable 503 instead of a generic 500.
 function isMigrationMissing(err) {
@@ -132,23 +154,32 @@ export async function handleAdminFilesUpload(request, env, { jsonOk, jsonErr, re
     return jsonErr(`DB error: ${e.message}`, 500);
   }
   if (existing) {
-    if (existing.status === 'deleted') {
-      try {
-        await env.DB
-          .prepare("UPDATE files SET status = 'stored' WHERE id = ?")
-          .bind(existing.id)
-          .run();
-      } catch (e) {
-        return jsonErr(`DB update failed: ${e.message}`, 500);
-      }
+    const resurrected = existing.status === 'deleted';
+    // If the re-upload carries fresher metadata (new original_name, mime,
+    // notes) reflect it. size_bytes is re-bound too for defensiveness even
+    // though same-sha256 means same byte-length in practice.
+    try {
+      await env.DB
+        .prepare(
+          resurrected
+            ? `UPDATE files SET status='stored', original_name=?, mime_type=?, notes=?, size_bytes=? WHERE id=?`
+            : `UPDATE files SET original_name=?, mime_type=?, notes=?, size_bytes=? WHERE id=?`
+        )
+        .bind(name, mime, notes, size, existing.id)
+        .run();
+    } catch (e) {
+      return jsonErr(`DB update failed: ${e.message}`, 500);
     }
+    await audit(env, request, 'files.upload', existing.id, {
+      sha256: sha, size, source_type: sourceType, deduped: true, resurrected,
+    });
     return jsonOk({
       file_id: existing.id,
       r2_key: existing.r2_key,
       sha256: sha,
-      size_bytes: existing.size_bytes,
+      size_bytes: size,
       deduped: true,
-      resurrected: existing.status === 'deleted',
+      resurrected,
     });
   }
 
@@ -190,6 +221,9 @@ export async function handleAdminFilesUpload(request, env, { jsonOk, jsonErr, re
           .first();
       } catch {}
       if (winner) {
+        await audit(env, request, 'files.upload', winner.id, {
+          sha256: sha, size, source_type: sourceType, deduped: true, race: true,
+        });
         return jsonOk({
           file_id: winner.id,
           r2_key: winner.r2_key,
@@ -207,8 +241,12 @@ export async function handleAdminFilesUpload(request, env, { jsonOk, jsonErr, re
     return jsonErr(`DB insert failed: ${e.message}`, 500);
   }
 
+  const fileId = insert.meta?.last_row_id;
+  await audit(env, request, 'files.upload', fileId, {
+    sha256: sha, size, source_type: sourceType, deduped: false,
+  });
   return jsonOk({
-    file_id: insert.meta?.last_row_id,
+    file_id: fileId,
     r2_key: r2Key,
     sha256: sha,
     size_bytes: size,
@@ -262,6 +300,9 @@ export async function handleAdminFilesList(request, env, { jsonOk, jsonErr, requ
     return jsonErr(`DB error: ${e.message}`, 500);
   }
 
+  await audit(env, request, 'files.list', null, {
+    count: rows.length, limit, after_id: afterId, status, source_type: sourceType,
+  });
   return jsonOk({
     files: rows,
     next_after_id: rows.length === limit ? rows[rows.length - 1].id : null,
@@ -310,6 +351,9 @@ export async function handleAdminFilesDelete(request, env, id, { jsonOk, jsonErr
     catch (e) { r2DeleteError = e.message; }
   }
 
+  await audit(env, request, 'files.delete', fileId, {
+    hard, r2_deleted: r2Deleted, r2_delete_error: r2DeleteError, previous_status: row.status,
+  });
   return jsonOk({
     file_id: fileId,
     soft: !hard,
@@ -343,6 +387,10 @@ export async function handleAdminStorageStats(request, env, { jsonOk, jsonErr, r
                 FROM files`)
       .first();
 
+    await audit(env, request, 'storage.stats', null, {
+      total_files: totals?.total_files ?? 0,
+      total_bytes: totals?.total_bytes ?? 0,
+    });
     return jsonOk({
       by_status: byStatus.results || [],
       by_source_type: byType.results || [],
