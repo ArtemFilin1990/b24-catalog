@@ -1,13 +1,49 @@
 (function () {
   const $ = (sel) => document.querySelector(sel);
 
-  // ---------- Tabs ----------
-  const tabs = document.querySelectorAll('.tab');
+  // ---------- View routing ----------
   const views = { chat: $('#view-chat'), upload: $('#view-upload') };
-  tabs.forEach(t => t.addEventListener('click', () => {
-    tabs.forEach(x => x.classList.toggle('active', x === t));
-    Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === t.dataset.tab));
-  }));
+  const headerTitle = $('#header-title');
+  const headerSub = $('#header-sub');
+  const backBtn = $('#back-btn');
+
+  function showView(name) {
+    Object.entries(views).forEach(([k, v]) => v.classList.toggle('active', k === name));
+    if (name === 'upload') {
+      headerTitle.textContent = 'База знаний';
+      headerSub.textContent = 'Управление контентом';
+      backBtn.hidden = false;
+    } else {
+      headerTitle.textContent = 'Бот Эверест';
+      headerSub.textContent = 'В сети';
+      backBtn.hidden = true;
+    }
+  }
+  backBtn.addEventListener('click', () => showView('chat'));
+  $('#kb-back').addEventListener('click', () => showView('chat'));
+
+  // ---------- Menu sheet ----------
+  const menuBtn = $('#menu-btn');
+  const sheet = $('#menu-sheet');
+  const sheetOverlay = $('#sheet-overlay');
+
+  function closeMenu() {
+    sheet.classList.remove('open');
+    sheetOverlay.classList.remove('open');
+  }
+  menuBtn.addEventListener('click', () => {
+    sheet.classList.toggle('open');
+    sheetOverlay.classList.toggle('open');
+  });
+  sheetOverlay.addEventListener('click', closeMenu);
+  sheet.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.action;
+      closeMenu();
+      if (act === 'kb') showView('upload');
+      else if (act === 'clear') clearChat();
+    });
+  });
 
   // ---------- Stats ----------
   async function loadStats() {
@@ -15,56 +51,217 @@
       const r = await fetch('/api/stats');
       const j = await r.json();
       if (!j.ok) return;
-      const vec = j.vectorize?.vectorsCount ?? j.vectorize?.vectors_count ?? '?';
-      $('#stats').textContent = `каталог: ${j.catalog} · KB: ${j.knowledge_base} · векторов: ${vec}`;
+      const vec = j.vectorize?.vectorCount ?? j.vectorize?.vectorsCount ?? '?';
+      $('#stats').textContent = `каталог ${j.catalog} · KB ${j.knowledge_base} · векторов ${vec}`;
     } catch { /* ignore */ }
   }
   loadStats();
+
+  // ---------- File text extraction ----------
+  async function extractPdf(file) {
+    if (!window.pdfjsLib) throw new Error('pdf.js не загружен');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const pages = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pages.push(content.items.map(x => x.str).join(' '));
+    }
+    return pages.join('\n\n');
+  }
+
+  async function extractDocx(file) {
+    if (!window.mammoth) throw new Error('mammoth не загружен');
+    const buf = await file.arrayBuffer();
+    const res = await mammoth.extractRawText({ arrayBuffer: buf });
+    return res.value || '';
+  }
+
+  async function extractText(file) {
+    const name = (file.name || '').toLowerCase();
+    const type = file.type || '';
+    if (name.endsWith('.pdf') || type === 'application/pdf') return extractPdf(file);
+    if (name.endsWith('.docx') || type.includes('officedocument.wordprocessingml')) return extractDocx(file);
+    try { return await file.text(); } catch { return ''; }
+  }
+
+  function readAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+  }
+
+  function isImage(file) {
+    return file && (file.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name || ''));
+  }
+
+  function fmtSize(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderInline(s) {
+    return escapeHtml(s)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+?)`/g, '<code>$1</code>');
+  }
+
+  function renderMarkdown(md) {
+    if (!md) return '';
+    const lines = md.replace(/\r/g, '').split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.trim().startsWith('|') && i + 1 < lines.length &&
+          /^\s*\|?\s*:?-+/.test(lines[i + 1])) {
+        const header = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          const row = lines[i].trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+          rows.push(row);
+          i++;
+        }
+        let html = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+        for (const h of header) html += `<th>${renderInline(h)}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const row of rows) {
+          html += '<tr>';
+          for (let k = 0; k < header.length; k++) html += `<td>${renderInline(row[k] ?? '')}</td>`;
+          html += '</tr>';
+        }
+        html += '</tbody></table></div>';
+        out.push(html);
+        continue;
+      }
+      if (/^\s*[-•]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-•]\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*[-•]\s+/, ''));
+          i++;
+        }
+        out.push('<ul class="md-list">' + items.map(x => `<li>${renderInline(x)}</li>`).join('') + '</ul>');
+        continue;
+      }
+      if (!line.trim()) { out.push(''); i++; continue; }
+      out.push(`<p class="md-p">${renderInline(line)}</p>`);
+      i++;
+    }
+    return out.join('');
+  }
+
+  // ---------- Bot avatar SVG ----------
+  const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4 16 L9 10 L12 13 L16 8 L20 16 Z" fill="currentColor" stroke="none"/></svg>';
 
   // ---------- Chat ----------
   const chatEl = $('#chat');
   const formEl = $('#form');
   const inputEl = $('#input');
   const sendEl = $('#send');
-  const clearEl = $('#clear-btn');
+  const attachBtn = $('#attach-btn');
+  const attachInput = $('#attach-input');
+  const attachedListEl = $('#attached-list');
+  const micBtn = $('#mic-btn');
 
-  const EXAMPLES = [
-    'Подбери подшипник 6205 2RS C3',
-    'Аналог SKF 6305 от NSK',
-    'Чем 2RS отличается от ZZ?',
-    'Какие размеры у 22210 EK?',
+  const SUGGESTIONS = [
+    'аналог 6205 2RS C3',
+    'что это NU205',
+    'расшифруй 180205',
+    'подбери 7606',
   ];
 
   let messages = [];
+  let pending = [];
   let streaming = false;
 
-  function renderEmptyState() {
-    chatEl.innerHTML = '';
-    const wrap = document.createElement('div');
-    wrap.className = 'empty-state';
-    wrap.innerHTML = '<div>Привет! Я — ИИ-помощник по подшипникам ТД «Эверест». Знаю каталог и базу знаний.</div><div class="examples"></div>';
-    const examples = wrap.querySelector('.examples');
-    for (const ex of EXAMPLES) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'example-chip';
-      chip.textContent = ex;
-      chip.addEventListener('click', () => { inputEl.value = ex; autoresize(); inputEl.focus(); });
-      examples.appendChild(chip);
-    }
-    chatEl.appendChild(wrap);
+  function scrollToBottom() {
+    requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
   }
 
-  function clearEmpty() { const e = chatEl.querySelector('.empty-state'); if (e) e.remove(); }
+  function autoresize() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+  }
 
-  function appendMsg(role, content, { error = false } = {}) {
-    clearEmpty();
-    const el = document.createElement('div');
-    el.className = `msg ${role}${error ? ' error' : ''}`;
-    el.textContent = content;
-    chatEl.appendChild(el);
+  function setStreaming(v) {
+    streaming = v;
+    sendEl.disabled = v;
+    attachBtn.disabled = v;
+    inputEl.disabled = v;
+  }
+
+  function makeAvatar() {
+    const a = document.createElement('div');
+    a.className = 'avatar';
+    a.innerHTML = AVATAR_SVG;
+    return a;
+  }
+
+  function renderAttachmentChips(container, atts) {
+    if (!atts?.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'attachments';
+    for (const a of atts) {
+      if (a.kind === 'image' && a.dataUrl) {
+        const img = document.createElement('img');
+        img.className = 'attach-img';
+        img.src = a.dataUrl;
+        img.alt = a.name;
+        wrap.appendChild(img);
+        continue;
+      }
+      const chip = document.createElement('span');
+      chip.className = 'attach-chip';
+      chip.textContent = `📎 ${a.name} · ${fmtSize(a.size)}`;
+      wrap.appendChild(chip);
+    }
+    container.appendChild(wrap);
+  }
+
+  function appendUserMsg(text, atts) {
+    const row = document.createElement('div');
+    row.className = 'msg-row user';
+    const msg = document.createElement('div');
+    msg.className = 'msg user';
+    renderAttachmentChips(msg, atts);
+    if (text) {
+      const t = document.createElement('div');
+      t.textContent = text;
+      msg.appendChild(t);
+    }
+    row.appendChild(msg);
+    chatEl.appendChild(row);
     scrollToBottom();
-    return el;
+    return msg;
+  }
+
+  function appendBotMsg(content = '', { error = false } = {}) {
+    const row = document.createElement('div');
+    row.className = 'msg-row bot';
+    row.appendChild(makeAvatar());
+    const msg = document.createElement('div');
+    msg.className = `msg bot${error ? ' error' : ''}`;
+    msg.textContent = content;
+    row.appendChild(msg);
+    chatEl.appendChild(row);
+    scrollToBottom();
+    return msg;
   }
 
   function appendCursor(el) {
@@ -74,44 +271,174 @@
     return c;
   }
 
-  function scrollToBottom() {
-    requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+  function renderWelcome() {
+    chatEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'msg-row bot';
+    row.appendChild(makeAvatar());
+    const msg = document.createElement('div');
+    msg.className = 'msg bot';
+    msg.innerHTML = 'Здравствуйте! Я <strong>Бот Эверест</strong> — инженер по подшипникам.<br>Расшифрую маркировку, подберу аналог, объясню исполнение.<br><br><em>Популярные запросы:</em>';
+    const chips = document.createElement('div');
+    chips.className = 'chip-row';
+    for (const q of SUGGESTIONS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.textContent = q;
+      b.addEventListener('click', () => { inputEl.value = q; autoresize(); inputEl.focus(); });
+      chips.appendChild(b);
+    }
+    msg.appendChild(chips);
+    row.appendChild(msg);
+    chatEl.appendChild(row);
   }
 
-  function autoresize() {
-    inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
+  function renderPending() {
+    attachedListEl.innerHTML = '';
+    pending.forEach((p, idx) => {
+      const chip = document.createElement('div');
+      chip.className = 'attached-item';
+      if (p.kind === 'image' && p.dataUrl) {
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = p.dataUrl;
+        chip.appendChild(img);
+      } else {
+        const dot = document.createElement('span');
+        dot.textContent = '📎';
+        chip.appendChild(dot);
+      }
+      const label = document.createElement('span');
+      const extra = p.extractedChars ? ` · ${p.extractedChars.toLocaleString('ru')} симв.` : '';
+      label.textContent = `${p.name} · ${fmtSize(p.size)}${extra}`;
+      chip.appendChild(label);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'rm';
+      rm.textContent = '✕';
+      rm.addEventListener('click', () => {
+        pending.splice(idx, 1);
+        renderPending();
+      });
+      chip.appendChild(rm);
+      attachedListEl.appendChild(chip);
+    });
   }
 
-  function setStreaming(v) {
-    streaming = v;
-    sendEl.disabled = v;
-    inputEl.disabled = v;
+  attachBtn.addEventListener('click', () => attachInput.click());
+
+  attachInput.addEventListener('change', async () => {
+    const files = Array.from(attachInput.files || []);
+    for (const f of files) {
+      const entry = {
+        name: f.name,
+        size: f.size,
+        kind: isImage(f) ? 'image' : 'file',
+        text: '',
+        extractedChars: 0,
+        dataUrl: null,
+      };
+      if (entry.kind === 'image') {
+        try { entry.dataUrl = await readAsDataUrl(f); } catch { /* ignore */ }
+      } else {
+        try {
+          const t = await extractText(f);
+          entry.text = (t || '').slice(0, 6000);
+          entry.extractedChars = entry.text.length;
+        } catch { /* ignore */ }
+      }
+      pending.push(entry);
+    }
+    attachInput.value = '';
+    renderPending();
+  });
+
+  // ---------- Voice input ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let listening = false;
+
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.title = 'Распознавание речи не поддерживается в этом браузере';
+  } else {
+    recognition = new SR();
+    recognition.lang = 'ru-RU';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    let base = '';
+    recognition.onresult = (e) => {
+      let transcript = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+      inputEl.value = (base ? base + ' ' : '') + transcript;
+      autoresize();
+    };
+    recognition.onend = () => {
+      listening = false;
+      micBtn.classList.remove('recording');
+    };
+    recognition.onerror = () => {
+      listening = false;
+      micBtn.classList.remove('recording');
+    };
+
+    micBtn.addEventListener('click', () => {
+      if (streaming) return;
+      if (listening) {
+        try { recognition.stop(); } catch {}
+        return;
+      }
+      base = inputEl.value.trim();
+      try {
+        recognition.start();
+        listening = true;
+        micBtn.classList.add('recording');
+      } catch { /* already running */ }
+    });
   }
 
+  // ---------- Send ----------
   async function sendMessage(text) {
-    const q = text.trim();
-    if (!q || streaming) return;
-    messages.push({ role: 'user', content: q });
-    appendMsg('user', q);
+    const prompt = (text || '').trim();
+    if (!prompt && pending.length === 0) return;
+    if (streaming) return;
+
+    const docAttachments = pending.filter(p => p.kind !== 'image' && p.text);
+    const imgAttachments = pending.filter(p => p.kind === 'image' && p.dataUrl);
+    const otherAttachments = pending.filter(p => p.kind !== 'image' && !p.text);
+
+    const attachmentChunks = docAttachments.map(p => `📎 ${p.name}:\n${p.text}`);
+    for (const p of otherAttachments) attachmentChunks.push(`📎 ${p.name} (${fmtSize(p.size)}) — текст не распознан`);
+    const attachmentText = attachmentChunks.join('\n\n').slice(0, 12000);
+
+    const displayAtts = pending.map(p => ({ name: p.name, size: p.size, kind: p.kind, dataUrl: p.dataUrl }));
+    pending = [];
+    renderPending();
+
+    const userContentForHistory = prompt || (displayAtts.length ? '(см. прикреплённые материалы)' : '');
+    messages.push({ role: 'user', content: userContentForHistory });
+    appendUserMsg(prompt, displayAtts);
+
     inputEl.value = '';
     autoresize();
 
-    const botEl = appendMsg('bot', '');
+    const botEl = appendBotMsg('');
     const cursor = appendCursor(botEl);
     let botText = '';
-    let sources = { catalog: 0, kb: 0 };
-
     setStreaming(true);
+
     try {
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({
+          messages,
+          attachment_text: attachmentText || undefined,
+          images: imgAttachments.map(p => ({ name: p.name, dataUrl: p.dataUrl })),
+        }),
       });
-
-      sources.catalog = Number(resp.headers.get('X-Sources-Catalog') || 0);
-      sources.kb = Number(resp.headers.get('X-Sources-Kb') || 0);
 
       if (!resp.ok) {
         const errTxt = await resp.text().catch(() => `HTTP ${resp.status}`);
@@ -149,21 +476,13 @@
       }
 
       cursor.remove();
-      botEl.textContent = botText || '(пустой ответ)';
-      if (sources.catalog || sources.kb) {
-        const src = document.createElement('div');
-        src.className = 'sources';
-        const parts = [];
-        if (sources.catalog) parts.push(`каталог: ${sources.catalog}`);
-        if (sources.kb) parts.push(`база знаний: ${sources.kb}`);
-        src.textContent = 'Источники — ' + parts.join(' · ');
-        botEl.appendChild(src);
-      }
+      if (botText) botEl.innerHTML = renderMarkdown(botText);
+      else botEl.textContent = '(пустой ответ)';
       messages.push({ role: 'assistant', content: botText });
     } catch (e) {
       cursor.remove();
-      botEl.remove();
-      appendMsg('bot', `Ошибка: ${e.message || e}`, { error: true });
+      botEl.parentElement?.remove();
+      appendBotMsg(`Ошибка: ${e.message || e}`, { error: true });
       messages.pop();
     } finally {
       setStreaming(false);
@@ -171,22 +490,25 @@
     }
   }
 
+  function clearChat() {
+    if (streaming) return;
+    messages = [];
+    pending = [];
+    renderPending();
+    renderWelcome();
+    inputEl.focus();
+  }
+
   formEl.addEventListener('submit', (e) => { e.preventDefault(); sendMessage(inputEl.value); });
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(inputEl.value); }
   });
   inputEl.addEventListener('input', autoresize);
-  clearEl.addEventListener('click', () => {
-    if (streaming) return;
-    messages = [];
-    renderEmptyState();
-    inputEl.focus();
-  });
 
-  renderEmptyState();
+  renderWelcome();
   inputEl.focus();
 
-  // ---------- Upload / KB ----------
+  // ---------- KB upload ----------
   const titleEl = $('#doc-title');
   const textEl = $('#doc-text');
   const fileEl = $('#doc-file');
@@ -204,46 +526,16 @@
     statusEl.textContent = msg || '';
   }
 
-  async function extractPdf(file) {
-    if (!window.pdfjsLib) throw new Error('pdf.js не загружен');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const buf = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-    const pages = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      pages.push(content.items.map(x => x.str).join(' '));
-    }
-    return pages.join('\n\n');
-  }
-
-  async function extractDocx(file) {
-    if (!window.mammoth) throw new Error('mammoth не загружен');
-    const buf = await file.arrayBuffer();
-    const res = await mammoth.extractRawText({ arrayBuffer: buf });
-    return res.value || '';
-  }
-
-  async function extractFile(file) {
-    const name = file.name.toLowerCase();
-    if (name.endsWith('.pdf')) return await extractPdf(file);
-    if (name.endsWith('.docx')) return await extractDocx(file);
-    if (name.endsWith('.txt') || name.endsWith('.md') || file.type.startsWith('text/')) {
-      return await file.text();
-    }
-    throw new Error('Неподдерживаемый формат: ' + file.name);
-  }
-
   fileEl.addEventListener('change', async () => {
     const f = fileEl.files?.[0];
     if (!f) return;
     if (!titleEl.value.trim()) titleEl.value = f.name.replace(/\.[^.]+$/, '');
     setStatus(`Извлекаю текст из ${f.name}…`, 'info');
     try {
-      const text = await extractFile(f);
-      textEl.value = text.slice(0, 300000);
-      setStatus(`Извлечено ${text.length.toLocaleString('ru')} символов. Нажмите «Загрузить в базу».`, 'success');
+      const text = await extractText(f);
+      textEl.value = (text || '').slice(0, 300000);
+      if (!textEl.value) setStatus(`Файл ${f.name} не содержит распознанного текста.`, 'error');
+      else setStatus(`Извлечено ${text.length.toLocaleString('ru')} символов.`, 'success');
     } catch (e) {
       setStatus('Ошибка: ' + (e.message || e), 'error');
     }
@@ -259,7 +551,7 @@
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
 
     try { localStorage.setItem('ai-kb-admin', token); } catch {}
-    setStatus('Индексирую в Vectorize…', 'info');
+    setStatus('Индексирую…', 'info');
     uploadBtn.disabled = true;
     try {
       const r = await fetch('/api/ingest', {
@@ -269,7 +561,7 @@
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setStatus(`Готово. Проиндексировано ${j.chunks} чанков, kb_id=${j.kb_id}.`, 'success');
+      setStatus(`Готово. Добавлено ${j.chunks} фрагментов (ID ${j.kb_id}).`, 'success');
       titleEl.value = '';
       textEl.value = '';
       fileEl.value = '';
@@ -281,35 +573,73 @@
     }
   });
 
+  async function reindexCall(afterId, chunkFrom, token) {
+    const r = await fetch(`/api/reindex?after_id=${afterId}&chunk_from=${chunkFrom}`, {
+      method: 'POST',
+      headers: { 'X-Admin-Token': token },
+    });
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      const txt = await r.text().catch(() => '');
+      const snippet = txt.replace(/<[^>]+>/g, ' ').trim().slice(0, 160);
+      const err = new Error(`HTTP ${r.status} ${r.statusText || ''} ${snippet}`.trim());
+      err.status = r.status;
+      throw err;
+    }
+    const j = await r.json();
+    if (!j.ok) {
+      const err = new Error(j.error || `HTTP ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    return j;
+  }
+
   reindexBtn.addEventListener('click', async () => {
     const token = tokenEl.value.trim();
     if (!token) return setStatus('Введите X-Admin-Token', 'error');
-    if (!confirm('Перестроить индекс по всем записям knowledge_base? Это может занять несколько минут.')) return;
+    if (!confirm('Перестроить индекс по всем записям knowledge_base?')) return;
     try { localStorage.setItem('ai-kb-admin', token); } catch {}
     reindexBtn.disabled = true;
     let afterId = 0;
     let chunkFrom = 0;
     let totalChunks = 0;
     let rowsDone = 0;
+    const RETRY_DELAYS = [1500, 3000, 6000];
+
     try {
-      while (true) {
-        setStatus(`Переиндексирую: записей обработано ${rowsDone}, чанков ${totalChunks}…`, 'info');
-        const r = await fetch(`/api/reindex?after_id=${afterId}&chunk_from=${chunkFrom}`, {
-          method: 'POST',
-          headers: { 'X-Admin-Token': token },
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      outer: while (true) {
+        setStatus(`Переиндексирую: записей ${rowsDone}, фрагментов ${totalChunks}…`, 'info');
+        let j;
+        let lastErr;
+        for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+          try {
+            j = await reindexCall(afterId, chunkFrom, token);
+            break;
+          } catch (e) {
+            lastErr = e;
+            const transient = !e.status || e.status >= 500 || e.status === 429;
+            if (!transient || attempt === RETRY_DELAYS.length) break;
+            await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+          }
+        }
+        if (!j) {
+          setStatus(`Пропускаю (after_id=${afterId}, chunk_from=${chunkFrom}): ${lastErr?.message || 'ошибка'}`, 'error');
+          await new Promise(r => setTimeout(r, 1200));
+          if (chunkFrom > 0) chunkFrom = 0;
+          else afterId += 1;
+          continue outer;
+        }
         totalChunks += j.indexed || 0;
         if (j.done) break;
         if (j.row_done) rowsDone++;
         afterId = j.next_after_id;
         chunkFrom = j.next_chunk_from;
       }
-      setStatus(`Готово. Проиндексировано ${totalChunks} чанков.`, 'success');
+      setStatus(`Готово. Проиндексировано ${totalChunks} фрагментов.`, 'success');
       loadStats();
     } catch (e) {
-      setStatus(`Прервано (after_id=${afterId}, chunk_from=${chunkFrom}): ${e.message || e}`, 'error');
+      setStatus(`Прервано: ${e.message || e}`, 'error');
     } finally {
       reindexBtn.disabled = false;
     }
