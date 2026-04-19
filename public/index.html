@@ -437,6 +437,41 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
     function log() { try { console.log.apply(console, ['[D1-Sync]'].concat([].slice.call(arguments))); } catch(e){} }
     function warn() { try { console.warn.apply(console, ['[D1-Sync]'].concat([].slice.call(arguments))); } catch(e){} }
 
+    // Admin token used on privileged endpoints (POST /api/imports,
+    // GET /api/sessions, DELETE /api/imports/:id). Lives in sessionStorage
+    // so it dies with the tab.
+    var ADMIN_KEY = 'ev_admin_token';
+    function getAdminToken(promptIfMissing) {
+      var t = '';
+      try { t = sessionStorage.getItem(ADMIN_KEY) || ''; } catch(e){}
+      if (!t && promptIfMissing) {
+        try {
+          t = window.prompt('Введите админ-токен (X-Admin-Token):') || '';
+          if (t) sessionStorage.setItem(ADMIN_KEY, t);
+        } catch(e){}
+      }
+      return t;
+    }
+    function clearAdminToken() { try { sessionStorage.removeItem(ADMIN_KEY); } catch(e){} }
+    function adminHeaders(extra) {
+      var h = Object.assign({}, extra || {});
+      var t = getAdminToken(true);
+      if (t) h['X-Admin-Token'] = t;
+      return h;
+    }
+    // fetch + auto-retry on 401 with a fresh prompt.
+    async function adminFetch(url, init) {
+      init = init || {};
+      init.headers = adminHeaders(init.headers || {});
+      var r = await fetch(url, init);
+      if (r.status === 401) {
+        clearAdminToken();
+        init.headers = adminHeaders(init.headers || {});
+        if (init.headers['X-Admin-Token']) r = await fetch(url, init);
+      }
+      return r;
+    }
+
     // Читаем серверные импорты и добавляем в каталог.
     // Вызываем ДО __EV_LOAD_CATALOG чтобы когда React смонтируется, данные уже были.
     window.__EV_D1_SYNC.fetchImports = async function() {
@@ -464,7 +499,7 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
           format: meta.format || '',
           uploaded_by: meta.uploaded_by || (localStorage.getItem('ev_user') || 'anonymous')
         };
-        var r = await fetch(API_BASE + '/api/imports', {
+        var r = await adminFetch(API_BASE + '/api/imports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -476,21 +511,21 @@ console.log('[Everest] Импорт: XLSX/CSV/DOCX/PDF/JSON/TXT готов');
       } catch(e) { warn('pushImport fail', e.message); return null; }
     };
 
-    // Получить список сессий
+    // Получить список сессий (admin).
     window.__EV_D1_SYNC.listSessions = async function() {
       if (!API_BASE) return [];
       try {
-        var r = await fetch(API_BASE + '/api/sessions', { cache: 'no-store' });
+        var r = await adminFetch(API_BASE + '/api/sessions', { cache: 'no-store' });
         var j = await r.json();
         return (j && j.ok) ? (j.sessions || []) : [];
       } catch(e) { return []; }
     };
 
-    // Удалить сессию
+    // Удалить сессию (admin).
     window.__EV_D1_SYNC.deleteSession = async function(sessionId) {
       if (!API_BASE || !sessionId) return false;
       try {
-        var r = await fetch(API_BASE + '/api/imports/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+        var r = await adminFetch(API_BASE + '/api/imports/' + encodeURIComponent(sessionId), { method: 'DELETE' });
         var j = await r.json();
         return !!(j && j.ok);
       } catch(e) { return false; }
