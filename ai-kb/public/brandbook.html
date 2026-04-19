@@ -238,11 +238,13 @@
     }
 
     .phone-statusbar {
+      width: 100%;
       display: flex;
       justify-content: space-between;
-      padding: 6px 22px 0;
-      font-size: 11px;
+      padding: 0 4px;
+      font-size: 10px;
       color: #fff;
+      opacity: 0.85;
       position: relative;
       z-index: 1;
     }
@@ -393,7 +395,7 @@
         <h2>Шрифты</h2>
         <div class="fonts-names">
           <div class="font-row"><strong>Inter</strong> <span>Bold</span></div>
-          <div class="font-row"><strong style="font-weight:400">Inter</strong> <span>Regular</span></div>
+          <div class="font-row">Inter <span>Regular</span></div>
         </div>
         <div class="font-sample">АБВГДЕЁЖЗИЙКЛМНОП</div>
         <div class="font-sample">РСТУФХЦЧШЩЪЫЬЭЮЯ</div>
@@ -419,7 +421,7 @@
           <div class="phone-screen">
             <div class="phone-notch"></div>
             <div class="phone-header">
-              <div style="width:100%; display:flex; justify-content:space-between; padding:0 4px; font-size:10px; opacity:0.85;">
+              <div class="phone-statusbar">
                 <span>14:15</span>
                 <span>5G ⚡</span>
               </div>
