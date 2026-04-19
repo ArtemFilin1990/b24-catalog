@@ -8,9 +8,10 @@ name: Deploy ai-kb to Cloudflare Workers
 
 on:
   push:
-    # Any push to main triggers self-heal — Cloudflare's native Git
+    # Any push to main triggers a redeploy — Cloudflare's native Git
     # integration clobbers ai-kb on any merge (not just ai-kb/** ones),
-    # so we react to every push and short-circuit if nothing's broken.
+    # so we always re-assert the correct build. Only scheduled runs
+    # short-circuit when the worker is already healthy.
     branches: [main]
   schedule:
     # Safety net: run every 15 min in case a push slipped through or
