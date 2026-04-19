@@ -35,7 +35,7 @@
   sidebarToggle?.addEventListener('click', (e) => { e.stopPropagation(); toggleSidebar(); });
   document.addEventListener('click', (e) => {
     if (!sidebar || !sidebar.classList.contains('open')) return;
-    if (sidebar.contains(e.target) || (sidebarToggle && sidebarToggle.contains(e.target))) return;
+    if (sidebar.contains(e.target) || sidebarToggle?.contains(e.target)) return;
     toggleSidebar(false);
   });
 
