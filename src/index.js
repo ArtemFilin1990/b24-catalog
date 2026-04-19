@@ -271,8 +271,12 @@ export default {
     if (path === '/api/ask' && (method === 'POST' || method === 'GET')) {
       // Workers AI is metered — 20 req/min per IP is plenty for humans,
       // enough to break scripted abuse before it burns neurons.
-      const rl = await checkRate(env.DB, bucketForRequest(request, 'ask'), 20, 60);
-      if (!rl.allowed) return rateLimitedResponse(rl);
+      // Admins (X-Admin-Token / Bearer) bypass the limit so the operator
+      // can soak-test the gateway without getting throttled.
+      if (!requireAdmin(request, env)) {
+        const rl = await checkRate(env.DB, bucketForRequest(request, 'ask'), 20, 60);
+        if (!rl.allowed) return rateLimitedResponse(rl);
+      }
       let question;
       if (method === 'POST') {
         const body = await readJSON(request);
@@ -362,8 +366,12 @@ export default {
     if (path === '/api/orders' && method === 'POST') {
       // Public endpoint — protect against spam/fraud with a per-IP cap.
       // Real customers rarely submit more than one order per hour.
-      const rl = await checkRate(env.DB, bucketForRequest(request, 'orders'), 5, 3600);
-      if (!rl.allowed) return rateLimitedResponse(rl);
+      // Admins bypass (support team may legitimately submit orders on
+      // behalf of a customer from a single office IP).
+      if (!requireAdmin(request, env)) {
+        const rl = await checkRate(env.DB, bucketForRequest(request, 'orders'), 5, 3600);
+        if (!rl.allowed) return rateLimitedResponse(rl);
+      }
       const body = await readJSON(request);
       if (!body || !body.contact) return jsonErr('contact{} required', 400);
       const contact = body.contact;

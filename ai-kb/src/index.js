@@ -729,9 +729,11 @@ export default {
     if (path === '/api/chat'   && method === 'POST') {
       // Chat burns 70B inference + bge-m3 embed + maybe vision per turn,
       // so each request is expensive. 30/min is ~1 per 2s — more than
-      // enough for humans, stops scripts cold.
-      const rl = await checkRate(env.DB, bucketForRequest(request, 'chat'), 30, 60);
-      if (!rl.allowed) return rateLimitedResponse(rl);
+      // enough for humans, stops scripts cold. Admins bypass for testing.
+      if (!requireAdmin(request, env)) {
+        const rl = await checkRate(env.DB, bucketForRequest(request, 'chat'), 30, 60);
+        if (!rl.allowed) return rateLimitedResponse(rl);
+      }
       return handleChat(request, env);
     }
     if (path === '/api/search' && method === 'GET')  return handleSearch(request, env);
