@@ -9,6 +9,7 @@ import {
   handleAdminStorageStats,
 } from './files.js';
 import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
+import { extractDimensions, findAnalogsByDimensions, geoRowToText } from './bearings.js';
 
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -120,10 +121,23 @@ function jsonErr(message, status = 400) {
   });
 }
 
+// Constant-time string compare — same primitive as the root worker's
+// safeEqual. We deliberately don't use crypto.subtle.timingSafeEqual
+// because it's not portable across Workers runtime versions and adds
+// no benefit for ASCII tokens at this length. Manual XOR over codeUnits
+// is plenty fast and runs in O(n) regardless of mismatch position.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 function requireAdmin(request, env) {
   const expected = env.ADMIN_TOKEN;
   if (!expected) return false;
-  return request.headers.get('X-Admin-Token') === expected;
+  const got = request.headers.get('X-Admin-Token') || '';
+  return safeEqual(got, expected);
 }
 
 // ============================================================
@@ -137,15 +151,11 @@ const SETTING_KEYS = new Set([
   'vector_topk',
 ]);
 
-async function ensureSettingsTable(env) {
-  await env.DB.prepare(
-    'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))'
-  ).run();
-}
-
+// Schema lives in ai-kb/migrations/0005_settings.sql — no lazy DDL here.
+// Read errors fall back to compile-time defaults so chat keeps working
+// even if the migration hasn't been applied yet.
 async function getSetting(env, key, fallback) {
   try {
-    await ensureSettingsTable(env);
     const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
     return row?.value ?? fallback;
   } catch {
@@ -154,7 +164,6 @@ async function getSetting(env, key, fallback) {
 }
 
 async function setSetting(env, key, value) {
-  await ensureSettingsTable(env);
   await env.DB
     .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
     .bind(key, value)
@@ -162,12 +171,11 @@ async function setSetting(env, key, value) {
 }
 
 async function deleteSetting(env, key) {
-  await ensureSettingsTable(env);
   await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
 }
 
 async function handleGetSettings(env) {
-  await ensureSettingsTable(env);
+
   const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
   const out = {
     system_prompt: AI_SYSTEM,
@@ -210,7 +218,7 @@ async function handleSetSettings(request, env) {
     }
   }
   if (statements.length) {
-    await ensureSettingsTable(env);
+
     await env.DB.batch(statements);
   }
   return jsonOk({ saved });
@@ -414,7 +422,7 @@ async function handleChat(request, env) {
   // (e.g. catalog_topk=0 to disable the catalog leg) aren't swallowed by ||.
   let sRows = [];
   try {
-    await ensureSettingsTable(env);
+
     const res = await env.DB.prepare('SELECT key, value FROM settings').all();
     sRows = res.results || [];
   } catch { /* settings table unreachable — fall back to constants */ }
@@ -430,9 +438,16 @@ async function handleChat(request, env) {
   const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
   const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
 
-  const [catalogRows, kbMatches] = await Promise.all([
+  // If the user wrote dimensions like "25x52x15", do a strict geometric
+  // lookup in parallel with FTS+Vectorize. FTS would let LLM hallucinate
+  // analogs that share a base number but differ in seal/clearance — the
+  // geo leg returns physically compatible bearings only.
+  const dims = extractDimensions(searchQuery);
+
+  const [catalogRows, kbMatches, geoRows] = await Promise.all([
     catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
     vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
+    dims ? findAnalogsByDimensions(env.DB, dims.d_inner, dims.d_outer, dims.width).catch(() => []) : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
@@ -444,6 +459,10 @@ async function handleChat(request, env) {
   const ctx = buildContext(catalogRows, kbMatches);
   const parts = [];
   if (ctx)               parts.push('Контекст:\n' + ctx);
+  if (geoRows.length) {
+    const lines = geoRows.map(r => '- ' + geoRowToText(r));
+    parts.push(`Точные геометрические аналоги (d=${dims.d_inner} D=${dims.d_outer} B=${dims.width}):\n${lines.join('\n')}`);
+  }
   if (attachmentText)    parts.push('Прикреплённые документы:\n' + attachmentText);
   if (imageDescs.length) parts.push('Описание изображений:\n' + imageDescs.join('\n'));
   parts.push('Вопрос: ' + searchQuery);
@@ -501,6 +520,7 @@ async function handleChat(request, env) {
       ...SSE_HEADERS,
       'X-Sources-Catalog': String(catalogRows.length),
       'X-Sources-Kb':      String(kbMatches.length),
+      'X-Sources-Geo':     String(geoRows.length),
       'X-Images-Described': String(imageDescs.length),
     },
   });
