@@ -1,0 +1,57 @@
+# references/wrangler-template.toml
+# Скопировать в корень проекта как wrangler.toml и заполнить IDs.
+# Аккаунт Эверест: 84cbacc4816c29c294101ec57a0bea5d
+
+name = "b24-catalog"
+main = "src/index.js"
+compatibility_date = "2026-04-17"
+compatibility_flags = ["nodejs_compat"]
+
+account_id = "84cbacc4816c29c294101ec57a0bea5d"
+
+# Статика (админ-панель)
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Workers AI
+[ai]
+binding = "AI"
+
+# D1 (каталог, история диалогов, документы, конфиг)
+[[d1_databases]]
+binding = "DB"
+database_name = "b24-catalog-db"
+database_id = "11a157a7-c3e0-4b6b-aa24-3026992db298"
+
+# R2 (документы базы знаний)
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "vedro"
+
+# Vectorize — база знаний
+[[vectorize]]
+binding = "KB_INDEX"
+index_name = "ewerest-kb"
+
+# Vectorize — каталог (опционально, для семантического поиска подшипников)
+[[vectorize]]
+binding = "CATALOG_INDEX"
+index_name = "ewerest-catalog"
+
+# Секреты (задать: npx wrangler secret put <NAME>)
+# ADMIN_TOKEN       — bearer для /admin/*
+# BITRIX24_WEBHOOK  — (опционально) создание лида в CRM Эверест
+# TELEGRAM_TOKEN    — (опционально) пуш уведомлений менеджеру
+
+# Переменные окружения (не секреты)
+[vars]
+WORKER_ENV = "production"
+
+# Cron для очистки старых сессий (раз в сутки в 03:00 UTC)
+[triggers]
+crons = ["0 3 * * *"]
+
+# Observability
+[observability]
+enabled = true
