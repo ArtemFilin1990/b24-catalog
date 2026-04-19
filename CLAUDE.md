@@ -14,6 +14,12 @@ Prefer the local skills in `.claude/skills/` before generic reasoning when the t
 
 When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
 
+## Donor reference packs
+
+`skill-packs/` holds third-party/donor material that is **not** production code. Treat it as reading-only background when tuning prompts or validating bearing logic:
+
+- `skill-packs/ewerest-ai-chatbot/` — an earlier standalone chatbot design. Useful donor material is in `references/bearing-rules.md` and `references/system-prompt.md`. The package's `src/`, `scripts/d1_schema.sql`, `scripts/seed_catalog.py` and `wrangler-template.toml` conflict with the live `ai-kb` worker and live D1 schema — **do not copy them into `src/` or `ai-kb/src/`**. See `skill-packs/ewerest-ai-chatbot/INTEGRATION.md` for the file-by-file mapping and rejected items.
+
 ## Repo shape
 
 Cloudflare mono-repo with **two workers** sharing the same D1 + R2 backing store:
