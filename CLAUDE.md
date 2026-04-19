@@ -9,8 +9,10 @@ Prefer the local skills in `.claude/skills/` before generic reasoning when the t
 - `.claude/skills/kb-audit` — review PRs, migrations, D1 schema safety, scope drift, and merge risk.
 - `.claude/skills/bearing-analog-check` — validate bearing type/series/geometry logic and enforce `NO DIRECT EQUIV` when exact matches are absent.
 - `.claude/skills/catalog-import-review` — review catalog import/staging/view logic, normalized rows, duplicate prevention, and migration bootstrap safety.
+- `.claude/skills/cloudflare-worker-review` — review Worker routes, secrets, bindings, deploy flow, Cloudflare-specific risks, and admin/auth hardening.
+- `.claude/skills/d1-migration-safety` — review D1 migration bootstrap safety, upgrade safety, helper-table dependencies, id/view collisions, and clean-db behavior.
 
-When a task touches PR review, migrations, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
+When a task touches PR review, migrations, Cloudflare worker behavior, admin/auth flow, bearing analog logic, import/staging SQL, or catalog read models, load and follow the matching local skill first.
 
 ## Repo shape
 
