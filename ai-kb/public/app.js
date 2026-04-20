@@ -1,25 +1,43 @@
 (function () {
   const $ = (sel) => document.querySelector(sel);
 
-  // ---------- Client identity (per-browser) ----------
-  // Stable UUID used to own chat_sessions rows on the server so a tab can
-  // list + resume only its own history. Stored in localStorage so the same
-  // browser comes back to the same sessions after reload.
-  const CLIENT_KEY = 'ai-kb-client-id';
-  function ensureClientId() {
-    try {
-      let id = localStorage.getItem(CLIENT_KEY);
-      if (!id) {
-        id = (crypto?.randomUUID && crypto.randomUUID()) ||
-             (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
-        localStorage.setItem(CLIENT_KEY, id);
-      }
-      return id;
-    } catch {
-      return 'anon-' + Math.random().toString(36).slice(2);
-    }
+  // ---------- Auth state ----------
+  // After login/register the server returns an opaque Bearer token that
+  // ties all this browser's requests to a user account. Token + display
+  // name live in localStorage so reloads keep the same identity.
+  const AUTH_TOKEN_KEY = 'ai-kb-auth-token';
+  const AUTH_USER_KEY  = 'ai-kb-auth-username';
+  function getToken() {
+    try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch { return ''; }
   }
-  const CLIENT_ID = ensureClientId();
+  function getUsername() {
+    try { return localStorage.getItem(AUTH_USER_KEY) || ''; } catch { return ''; }
+  }
+  function setAuth(token, username) {
+    try {
+      localStorage.setItem(AUTH_TOKEN_KEY, token || '');
+      localStorage.setItem(AUTH_USER_KEY, username || '');
+    } catch {}
+  }
+  function clearAuth() {
+    try {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.removeItem(AUTH_USER_KEY);
+    } catch {}
+  }
+  // Wrapper so every request carries the Bearer token and auto-surfaces
+  // a fresh login modal if the server says the token is gone.
+  async function authFetch(url, options = {}) {
+    const token = getToken();
+    const headers = Object.assign({}, options.headers || {});
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const r = await fetch(url, Object.assign({}, options, { headers }));
+    if (r.status === 401) {
+      clearAuth();
+      showAuthModal();
+    }
+    return r;
+  }
   function newSessionId() {
     return (crypto?.randomUUID && crypto.randomUUID()) ||
       ('s-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
@@ -538,13 +556,12 @@
     setStreaming(true);
 
     try {
-      const resp = await fetch('/api/chat', {
+      const resp = await authFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages,
           session_id: currentSessionId,
-          client_id: CLIENT_ID,
           attachment_text: attachmentText || undefined,
           images: imgAttachments.map(p => ({ name: p.name, dataUrl: p.dataUrl })),
         }),
@@ -713,8 +730,9 @@
   }
 
   async function loadSessions() {
+    if (!getToken()) return;
     try {
-      const r = await fetch('/api/sessions?client_id=' + encodeURIComponent(CLIENT_ID));
+      const r = await authFetch('/api/sessions');
       const j = await r.json();
       if (!j.ok) return;
       sessionsIndex = j.sessions || [];
@@ -726,7 +744,7 @@
     if (streaming) return;
     if (sid === currentSessionId) { toggleSidebar(false); return; }
     try {
-      const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/messages?client_id=${encodeURIComponent(CLIENT_ID)}`);
+      const r = await authFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`);
       const j = await r.json();
       if (!j.ok) return;
       currentSessionId = sid;
@@ -766,7 +784,7 @@
     if (streaming) return;
     if (!confirm('Удалить этот чат?')) return;
     try {
-      const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
+      const r = await authFetch(`/api/sessions/${encodeURIComponent(sid)}`, {
         method: 'DELETE',
       });
       const j = await r.json();
@@ -784,9 +802,133 @@
 
   newChatBtn?.addEventListener('click', newChat);
 
+  // ---------- Auth modal ----------
+  const authOverlay = $('#auth-overlay');
+  const authForm = $('#auth-form');
+  const authUsername = $('#auth-username');
+  const authPassword = $('#auth-password');
+  const authError = $('#auth-error');
+  const authSubmit = $('#auth-submit');
+  const authHint = $('#auth-hint');
+  const authTabs = authOverlay?.querySelectorAll('.auth-tab') || [];
+  const headerUser = $('#header-user');
+  const headerUserName = $('#header-user-name');
+  const logoutBtn = $('#logout-btn');
+
+  let authMode = 'login';
+
+  function setAuthMode(mode) {
+    authMode = mode === 'register' ? 'register' : 'login';
+    authTabs.forEach(t => t.classList.toggle('active', t.dataset.tab === authMode));
+    authSubmit.textContent = authMode === 'register' ? 'Создать аккаунт' : 'Войти';
+    authHint.textContent = authMode === 'register'
+      ? 'Уже есть аккаунт? Переключитесь на «Войти» выше.'
+      : 'Нет аккаунта? Переключитесь на «Регистрация» выше.';
+    authPassword.setAttribute(
+      'autocomplete', authMode === 'register' ? 'new-password' : 'current-password'
+    );
+    setAuthError('');
+  }
+
+  function setAuthError(msg) {
+    authError.textContent = msg || '';
+    authError.hidden = !msg;
+  }
+
+  function showAuthModal() {
+    setAuthError('');
+    authOverlay.hidden = false;
+    headerUser.hidden = true;
+    setTimeout(() => authUsername?.focus(), 50);
+  }
+
+  function hideAuthModal() {
+    authOverlay.hidden = true;
+  }
+
+  function applyUserToHeader(username) {
+    if (!username) { headerUser.hidden = true; return; }
+    headerUserName.textContent = username;
+    headerUser.hidden = false;
+  }
+
+  authTabs.forEach(t => t.addEventListener('click', () => setAuthMode(t.dataset.tab)));
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+    if (!username || !password) { setAuthError('Заполните оба поля'); return; }
+    authSubmit.disabled = true;
+    setAuthError('');
+    try {
+      const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+      if (!j.ok || !j.token) {
+        setAuthError(j.error || 'Не удалось войти');
+        return;
+      }
+      setAuth(j.token, j.username || username);
+      applyUserToHeader(j.username || username);
+      hideAuthModal();
+      authPassword.value = '';
+      currentSessionId = newSessionId();
+      messages = [];
+      pending = [];
+      renderPending();
+      renderWelcome();
+      await loadSessions();
+      inputEl.focus();
+    } catch (err) {
+      setAuthError('Ошибка сети: ' + (err?.message || err));
+    } finally {
+      authSubmit.disabled = false;
+    }
+  });
+
+  logoutBtn?.addEventListener('click', async () => {
+    try { await authFetch('/api/auth/logout', { method: 'POST' }); } catch {}
+    clearAuth();
+    messages = [];
+    pending = [];
+    sessionsIndex = [];
+    renderPending();
+    renderSidebar();
+    renderWelcome();
+    applyUserToHeader('');
+    showAuthModal();
+  });
+
+  async function bootstrapAuth() {
+    const token = getToken();
+    if (!token) { showAuthModal(); return; }
+    try {
+      const r = await fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) { clearAuth(); showAuthModal(); return; }
+      const j = await r.json();
+      if (!j.ok) { clearAuth(); showAuthModal(); return; }
+      setAuth(token, j.username || getUsername());
+      applyUserToHeader(j.username || getUsername());
+      hideAuthModal();
+      await loadSessions();
+    } catch {
+      // Network error on bootstrap: keep the user signed-in optimistically
+      // (no hard boot-out on flaky connection). Requests will re-surface
+      // the modal on 401 later.
+      applyUserToHeader(getUsername());
+      hideAuthModal();
+    }
+  }
+
   renderWelcome();
   renderSidebar();
-  loadSessions();
+  setAuthMode('login');
+  bootstrapAuth();
   inputEl.focus();
 
   // ---------- KB upload ----------

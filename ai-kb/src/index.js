@@ -10,11 +10,15 @@ import {
 } from './files.js';
 import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
 import { extractDimensions, extractBearingTypeHint, findAnalogsByDimensions, geoRowToText } from './bearings.js';
+import {
+  validateCredentials, hashPassword, safeEqHex, genSalt, newUserId,
+  createSessionToken, revokeToken, resolveUser, extractBearer,
+} from './auth.js';
 
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token',
   'Cache-Control': 'no-store, no-cache, must-revalidate',
 };
 
@@ -138,6 +142,64 @@ function requireAdmin(request, env) {
   if (!expected) return false;
   const got = request.headers.get('X-Admin-Token') || '';
   return safeEqual(got, expected);
+}
+
+// ============================================================
+// /api/auth — simple username/password auth
+// ============================================================
+async function handleAuthRegister(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+  const v = validateCredentials(body);
+  if (v.error) return jsonErr(v.error, 400);
+  try {
+    const existing = await env.DB
+      .prepare('SELECT id FROM users WHERE username = ?').bind(v.username).first();
+    if (existing) return jsonErr('Имя уже занято', 409);
+    const salt = genSalt();
+    const hash = await hashPassword(v.password, salt);
+    const userId = newUserId();
+    await env.DB.prepare(
+      'INSERT INTO users (id, username, password_hash, password_salt) VALUES (?, ?, ?, ?)'
+    ).bind(userId, v.username, hash, salt).run();
+    const { token, expires_at } = await createSessionToken(env, userId);
+    return jsonOk({ token, username: v.username, expires_at });
+  } catch (e) {
+    return jsonErr('Registration failed: ' + (e?.message || e), 500);
+  }
+}
+
+async function handleAuthLogin(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+  const v = validateCredentials(body);
+  if (v.error) return jsonErr(v.error, 400);
+  try {
+    const row = await env.DB.prepare(
+      'SELECT id, password_hash, password_salt FROM users WHERE username = ?'
+    ).bind(v.username).first();
+    // Always run PBKDF2 even if user is missing, so response time doesn't
+    // tell an attacker whether the username exists.
+    const salt = row?.password_salt || '0123456789abcdef0123456789abcdef';
+    const candidate = await hashPassword(v.password, salt);
+    const ok = !!row && safeEqHex(candidate, row.password_hash);
+    if (!ok) return jsonErr('Неверное имя или пароль', 401);
+    const { token, expires_at } = await createSessionToken(env, row.id);
+    return jsonOk({ token, username: v.username, expires_at });
+  } catch (e) {
+    return jsonErr('Login failed: ' + (e?.message || e), 500);
+  }
+}
+
+async function handleAuthLogout(request, env) {
+  await revokeToken(env, extractBearer(request));
+  return jsonOk({ logout: true });
+}
+
+async function handleAuthMe(request, env) {
+  const user = await resolveUser(request, env);
+  if (!user) return jsonErr('Unauthorized', 401);
+  return jsonOk({ username: user.username });
 }
 
 // ============================================================
@@ -438,8 +500,12 @@ async function handleChat(request, env) {
   if (!lastUser) return jsonErr('No user message');
 
   const sessionId      = String(body?.session_id || '').slice(0, 64) || null;
-  const clientId       = String(body?.client_id  || '').slice(0, 64) || null;
   const isAdmin        = requireAdmin(request, env);
+  const user           = isAdmin ? null : await resolveUser(request, env);
+  if (!isAdmin && !user) return jsonErr('Unauthorized', 401);
+  // Identity used to own chat_sessions rows. Authed user → their user.id;
+  // admin via X-Admin-Token → null (admin writes don't claim a client_id).
+  const clientId       = user?.id || null;
   const attachmentText = String(body?.attachment_text || '').slice(0, MAX_ATTACHMENT_TEXT);
   const rawImages      = Array.isArray(body?.images) ? body.images : [];
   const images         = rawImages.slice(0, MAX_IMAGES).filter(x => x?.dataUrl);
@@ -587,30 +653,34 @@ async function handleSearch(request, env) {
 async function handleSessions(request, env) {
   const url = new URL(request.url);
 
-  const clientId = String(url.searchParams.get('client_id') || '').slice(0, 64) || null;
-  const isAdmin  = requireAdmin(request, env);
+  const isAdmin = requireAdmin(request, env);
+  // Auth-gated: non-admin must present a valid Bearer token. The caller's
+  // user.id is the only owner id that matters — ?client_id= query is ignored
+  // except for admin inspection.
+  const user = isAdmin ? null : await resolveUser(request, env);
+  if (!isAdmin && !user) return jsonErr('Unauthorized', 401);
+  const clientId = user?.id || null;
+  const adminClientFilter = isAdmin
+    ? (String(url.searchParams.get('client_id') || '').slice(0, 64) || null)
+    : null;
 
-  // GET /api/sessions — список. Админ видит все; клиент — только свои.
+  // GET /api/sessions — список. Автор — только свои; админ без фильтра — все.
   if (request.method === 'GET' && url.pathname === '/api/sessions') {
     const limit  = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
     const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10), 0);
-    if (!isAdmin && !clientId) return jsonErr('client_id required', 400);
-    // Admin sees everything only when they omit client_id. If an admin also
-    // passes client_id (as the UI always does), filter to their own history
-    // so their sidebar isn't flooded with every chat in the DB.
-    const q = (isAdmin && !clientId)
+    const filterClient = clientId || adminClientFilter;
+    const q = (isAdmin && !filterClient)
       ? env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(limit, offset)
-      : env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions WHERE client_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(clientId, limit, offset);
+      : env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions WHERE client_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(filterClient, limit, offset);
     const { results } = await q.all();
     return jsonOk({ sessions: results || [] });
   }
 
-  // GET /api/sessions/:id/messages — owner-check: client_id должен совпасть.
+  // GET /api/sessions/:id/messages — owner-check по user.id.
   const m = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
   if (m && request.method === 'GET') {
     const sid = m[1];
     if (!isAdmin) {
-      if (!clientId) return jsonErr('client_id required', 400);
       const row = await env.DB.prepare('SELECT client_id FROM chat_sessions WHERE id = ?').bind(sid).first();
       if (!row) return jsonErr('Session not found', 404);
       if (row.client_id !== clientId) return jsonErr('Forbidden', 403);
@@ -627,7 +697,6 @@ async function handleSessions(request, env) {
   if (del && request.method === 'DELETE') {
     const sid = del[1];
     if (!isAdmin) {
-      if (!clientId) return jsonErr('client_id required', 400);
       const row = await env.DB.prepare('SELECT client_id FROM chat_sessions WHERE id = ?').bind(sid).first();
       if (!row) return jsonErr('Session not found', 404);
       if (row.client_id !== clientId) return jsonErr('Forbidden', 403);
@@ -816,6 +885,21 @@ export default {
       }
       return handleChat(request, env);
     }
+
+    // /api/auth — register/login/logout/me. Rate-limit register+login
+    // aggressively to slow down credential-stuffing and bot signups.
+    if (path === '/api/auth/register' && method === 'POST') {
+      const rl = await checkRate(env.DB, bucketForRequest(request, 'auth-reg'), 5, 300);
+      if (!rl.allowed) return rateLimitedResponse(rl);
+      return handleAuthRegister(request, env);
+    }
+    if (path === '/api/auth/login' && method === 'POST') {
+      const rl = await checkRate(env.DB, bucketForRequest(request, 'auth-login'), 10, 60);
+      if (!rl.allowed) return rateLimitedResponse(rl);
+      return handleAuthLogin(request, env);
+    }
+    if (path === '/api/auth/logout' && method === 'POST') return handleAuthLogout(request, env);
+    if (path === '/api/auth/me'     && method === 'GET')  return handleAuthMe(request, env);
     if (path === '/api/search' && method === 'GET')  return handleSearch(request, env);
     if (path === '/api/ingest' && method === 'POST') return handleIngest(request, env);
     if (path === '/api/reindex'&& method === 'POST') return handleReindex(request, env);
