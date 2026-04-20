@@ -281,16 +281,17 @@
 
   const SUGGESTIONS = [
     'Аналоги ГОСТ',
-    'Запросить цену',
+    'Аналоги ISO',
     'Расшифруй маркировку',
-    'Подбор по размерам',
   ];
 
   const SUGGESTION_PROMPTS = {
-    'Аналоги ГОСТ': 'Подбери ГОСТ-аналог по маркировке: ',
-    'Запросить цену': 'Запросить цену на подшипник ',
+    // Direction-aware prompts: the chip tells the bot which system the
+    // user WANTS BACK, and the example makes clear which system they're
+    // supplying — matches the one-way translation rule in AI_SYSTEM.
+    'Аналоги ГОСТ':        'Подбери ГОСТ-аналог по ISO-маркировке: ',
+    'Аналоги ISO':         'Подбери ISO-аналог по ГОСТ-маркировке: ',
     'Расшифруй маркировку': 'Расшифруй маркировку ',
-    'Подбор по размерам': 'Нужен подшипник с размерами d=_, D=_, B=_, тип _',
   };
 
   let messages = [];
