@@ -9,6 +9,7 @@ import {
   handleAdminStorageStats,
 } from './files.js';
 import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
+import { extractDimensions, extractBearingTypeHint, findAnalogsByDimensions, geoRowToText } from './bearings.js';
 
 const FRAME_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -120,10 +121,23 @@ function jsonErr(message, status = 400) {
   });
 }
 
+// Constant-time string compare — same primitive as the root worker's
+// safeEqual. We deliberately don't use crypto.subtle.timingSafeEqual
+// because it's not portable across Workers runtime versions and adds
+// no benefit for ASCII tokens at this length. Manual XOR over codeUnits
+// is plenty fast and runs in O(n) regardless of mismatch position.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 function requireAdmin(request, env) {
   const expected = env.ADMIN_TOKEN;
   if (!expected) return false;
-  return request.headers.get('X-Admin-Token') === expected;
+  const got = request.headers.get('X-Admin-Token') || '';
+  return safeEqual(got, expected);
 }
 
 // ============================================================
@@ -137,15 +151,11 @@ const SETTING_KEYS = new Set([
   'vector_topk',
 ]);
 
-async function ensureSettingsTable(env) {
-  await env.DB.prepare(
-    'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))'
-  ).run();
-}
-
+// Schema lives in ai-kb/migrations/0005_settings.sql — no lazy DDL here.
+// Read errors fall back to compile-time defaults so chat keeps working
+// even if the migration hasn't been applied yet.
 async function getSetting(env, key, fallback) {
   try {
-    await ensureSettingsTable(env);
     const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
     return row?.value ?? fallback;
   } catch {
@@ -153,22 +163,20 @@ async function getSetting(env, key, fallback) {
   }
 }
 
-async function setSetting(env, key, value) {
-  await ensureSettingsTable(env);
-  await env.DB
-    .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
-    .bind(key, value)
-    .run();
-}
-
-async function deleteSetting(env, key) {
-  await ensureSettingsTable(env);
-  await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
-}
+// setSetting/deleteSetting helpers removed — handleSetSettings inlines
+// the same SQL via env.DB.batch(). Restore them here only if a second
+// call site appears.
 
 async function handleGetSettings(env) {
-  await ensureSettingsTable(env);
-  const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+  // Fall back to compile-time defaults if the settings table is missing
+  // (migration 0005 not applied yet) or D1 is briefly unreachable. Match
+  // what getSetting() does on hot chat path so /api/settings can't be
+  // the only thing that 500s while chat keeps working.
+  let results = [];
+  try {
+    const res = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
+    results = res.results || [];
+  } catch { /* fall through with defaults */ }
   const out = {
     system_prompt: AI_SYSTEM,
     temperature: String(0.2),
@@ -210,8 +218,23 @@ async function handleSetSettings(request, env) {
     }
   }
   if (statements.length) {
-    await ensureSettingsTable(env);
-    await env.DB.batch(statements);
+    try {
+      await env.DB.batch(statements);
+    } catch (e) {
+      // Self-heal: on a fresh/staging D1 where 0005_settings hasn't been
+      // applied yet, the table is missing. Create it lazily this ONE time
+      // and replay the batch. Reads use getSetting()'s try/catch fallback
+      // to defaults, but writes must actually persist — returning 500
+      // here would silently break the admin panel.
+      if (String(e?.message || '').includes('no such table')) {
+        await env.DB
+          .prepare('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER DEFAULT (unixepoch()))')
+          .run();
+        await env.DB.batch(statements);
+      } else {
+        throw e;
+      }
+    }
   }
   return jsonOk({ saved });
 }
@@ -414,7 +437,7 @@ async function handleChat(request, env) {
   // (e.g. catalog_topk=0 to disable the catalog leg) aren't swallowed by ||.
   let sRows = [];
   try {
-    await ensureSettingsTable(env);
+
     const res = await env.DB.prepare('SELECT key, value FROM settings').all();
     sRows = res.results || [];
   } catch { /* settings table unreachable — fall back to constants */ }
@@ -430,9 +453,21 @@ async function handleChat(request, env) {
   const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
   const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
 
-  const [catalogRows, kbMatches] = await Promise.all([
+  // If the user wrote dimensions like "25x52x15" AND a type hint
+  // (e.g. NU205 / 6205 / 32205), do a strict geometric lookup in
+  // parallel with FTS+Vectorize. Type is required because the same
+  // d×D×B can belong to ball, cylindrical roller, tapered, etc. — geo
+  // alone would let LLM mix incompatible bearings into the "точные
+  // аналоги" block. No hint → no geo leg.
+  const dims = extractDimensions(searchQuery);
+  const typeHint = extractBearingTypeHint(searchQuery);
+
+  const [catalogRows, kbMatches, geoRows] = await Promise.all([
     catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
     vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
+    (dims && typeHint)
+      ? findAnalogsByDimensions(env.DB, dims.d_inner, dims.d_outer, dims.width, typeHint).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
@@ -444,6 +479,10 @@ async function handleChat(request, env) {
   const ctx = buildContext(catalogRows, kbMatches);
   const parts = [];
   if (ctx)               parts.push('Контекст:\n' + ctx);
+  if (geoRows.length) {
+    const lines = geoRows.map(r => '- ' + geoRowToText(r));
+    parts.push(`Точные геометрические аналоги (d=${dims.d_inner} D=${dims.d_outer} B=${dims.width}):\n${lines.join('\n')}`);
+  }
   if (attachmentText)    parts.push('Прикреплённые документы:\n' + attachmentText);
   if (imageDescs.length) parts.push('Описание изображений:\n' + imageDescs.join('\n'));
   parts.push('Вопрос: ' + searchQuery);
@@ -465,13 +504,13 @@ async function handleChat(request, env) {
       stream: true,
     });
   } catch (e) {
-    await logQuery(env, sessionId, searchQuery, 0, catalogRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, e?.message);
+    await logQuery(env, sessionId, searchQuery, 0, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, e?.message);
     return jsonErr(`AI error: ${e?.message || e}`, 502);
   }
 
   // Перехватываем поток для записи в историю
   const [streamA, streamB] = stream.tee();
-  const sources = catalogRows.length + kbMatches.length;
+  const sources = catalogRows.length + kbMatches.length + geoRows.length;
 
   // Асинхронно собираем ответ и пишем в D1
   (async () => {
@@ -492,7 +531,11 @@ async function handleChat(request, env) {
         }
       }
       await saveMessages(env, sessionId, searchQuery, full, sources);
-      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
+      // Roll geo-hits into the catalog count for query_log: the table has
+      // sourcesCat/sourcesKb columns only, and geo IS catalog data
+      // (just selected by exact dimension match). The precise per-leg
+      // breakdown still ships in the X-Sources-* response headers.
+      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
     } catch { /* не критично */ }
   })();
 
@@ -501,6 +544,7 @@ async function handleChat(request, env) {
       ...SSE_HEADERS,
       'X-Sources-Catalog': String(catalogRows.length),
       'X-Sources-Kb':      String(kbMatches.length),
+      'X-Sources-Geo':     String(geoRows.length),
       'X-Images-Described': String(imageDescs.length),
     },
   });
