@@ -1046,6 +1046,10 @@ body {
     width: 36px;
     height: 36px;
   }
+  /* Back-btn and sidebar-toggle share the same left slot. When we're on the
+     settings view the back button becomes visible — hide the hamburger then
+     so the two don't stack on top of each other. */
+  .chat-header:has(#back-btn:not([hidden])) #sidebar-toggle { display: none; }
   #menu-btn {
     position: absolute;
     top: 10px;
