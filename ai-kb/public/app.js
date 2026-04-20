@@ -107,6 +107,7 @@
       closeMenu();
       if (act === 'kb') showView('upload');
       else if (act === 'clear') clearChat();
+      else if (act === 'logout') $('#logout-btn')?.click();
     });
   });
 
