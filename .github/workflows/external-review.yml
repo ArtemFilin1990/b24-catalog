@@ -2,28 +2,56 @@ name: External Contributor Review
 
 # Runs Claude Code on every PR opened by a first-time contributor.
 # Leaves inline review comments + a welcoming top-level comment. Does not
-# approve or merge — humans still decide. Skipped for repo members and
-# anyone who has merged before (author_association filter below).
+# approve or merge — humans still decide.
+#
+# Why `pull_request_target` instead of `pull_request`:
+# first-time contributions almost always come from forks, and
+# `pull_request` from a fork does NOT expose repo secrets, so
+# `${{ secrets.ANTHROPIC_API_KEY }}` would be empty and the action would
+# silently no-op. `pull_request_target` runs in the context of the base
+# repo with secrets available.
+#
+# Security caveat: `pull_request_target` gets a write-scoped token and
+# runs in the base repo's trust boundary. DO NOT check out the PR's HEAD
+# (that would execute untrusted code with our secrets). The checkout
+# below takes the default ref (the base branch). The Claude action
+# reviews the diff through the GitHub API via `gh pr view` / inline
+# comment MCP, not by executing code from the fork.
 #
 # Required secret: ANTHROPIC_API_KEY (account or project-scoped key).
-# If the secret isn't set the job is a no-op — the Claude action prints
-# a warning and exits 0, so PRs aren't blocked.
+# Without the secret the Claude step exits non-destructively.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
+
+# One job per PR. A rapid series of `synchronize` events (force-push,
+# fixup commits) cancels the in-flight review so only the latest push
+# gets feedback — avoids duplicated comments and extra API spend.
+concurrency:
+  group: external-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   external-review:
-    if: github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # `FIRST_TIME_CONTRIBUTOR` — first PR to THIS repo.
+    # `FIRST_TIMER`           — first-ever PR on GitHub (also first to
+    #                           this repo by definition). GitHub surfaces
+    #                           both values, gate on either.
+    if: >-
+      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+      || github.event.pull_request.author_association == 'FIRST_TIMER'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
+          # Explicit: check out the BASE ref, never the fork's HEAD. Even
+          # though `pull_request_target` defaults to base, pinning makes
+          # the intent obvious to anyone reading/auditing this file.
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
 
       - uses: anthropics/claude-code-action@v1
