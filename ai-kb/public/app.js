@@ -1,6 +1,30 @@
 (function () {
   const $ = (sel) => document.querySelector(sel);
 
+  // ---------- Client identity (per-browser) ----------
+  // Stable UUID used to own chat_sessions rows on the server so a tab can
+  // list + resume only its own history. Stored in localStorage so the same
+  // browser comes back to the same sessions after reload.
+  const CLIENT_KEY = 'ai-kb-client-id';
+  function ensureClientId() {
+    try {
+      let id = localStorage.getItem(CLIENT_KEY);
+      if (!id) {
+        id = (crypto?.randomUUID && crypto.randomUUID()) ||
+             (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
+        localStorage.setItem(CLIENT_KEY, id);
+      }
+      return id;
+    } catch {
+      return 'anon-' + Math.random().toString(36).slice(2);
+    }
+  }
+  const CLIENT_ID = ensureClientId();
+  function newSessionId() {
+    return (crypto?.randomUUID && crypto.randomUUID()) ||
+      ('s-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  }
+
   // ---------- View routing ----------
   const views = { chat: $('#view-chat'), upload: $('#view-upload') };
   const headerTitle = $('#header-title');
@@ -253,6 +277,8 @@
   let messages = [];
   let pending = [];
   let streaming = false;
+  let currentSessionId = newSessionId();   // fresh chat by default
+  let sessionsIndex = [];                  // last /api/sessions payload
 
   function scrollToBottom() {
     requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
@@ -517,6 +543,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages,
+          session_id: currentSessionId,
+          client_id: CLIENT_ID,
           attachment_text: attachmentText || undefined,
           images: imgAttachments.map(p => ({ name: p.name, dataUrl: p.dataUrl })),
         }),
@@ -571,6 +599,9 @@
       if (botText) botEl.innerHTML = renderMarkdown(botText);
       else botEl.textContent = '(пустой ответ)';
       messages.push({ role: 'assistant', content: botText });
+      // Refresh sidebar so the just-persisted session shows up with its
+      // auto-generated title. Runs after the stream body is fully consumed.
+      loadSessions();
     } catch (e) {
       cursor.remove();
       botEl.parentElement?.remove();
@@ -598,7 +629,164 @@
   });
   inputEl.addEventListener('input', autoresize);
 
+  // ---------- Sidebar: chat list ----------
+  const chatListEl = $('#chat-list');
+  const newChatBtn = $('#new-chat-btn');
+
+  function fmtRowTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const daysAgo = Math.floor((now - d) / 86400000);
+    if (daysAgo < 7) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  }
+
+  function renderSidebar() {
+    chatListEl.innerHTML = '';
+    if (!sessionsIndex.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-list-empty';
+      empty.textContent = 'Пока пусто. Задайте первый вопрос — чат появится здесь.';
+      chatListEl.appendChild(empty);
+      return;
+    }
+    for (const s of sessionsIndex) {
+      // Row is a div (not button) because it contains a nested delete button —
+      // nesting <button> inside <button> is invalid HTML and browsers collapse
+      // the inner click in unpredictable ways.
+      const row = document.createElement('div');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.className = 'chat-row' + (s.id === currentSessionId ? ' active' : '');
+      row.dataset.sid = s.id;
+
+      const avatar = document.createElement('span');
+      avatar.className = 'chat-row-avatar';
+      avatar.innerHTML = AVATAR_SVG;
+      row.appendChild(avatar);
+
+      const body = document.createElement('span');
+      body.className = 'chat-row-body';
+      const name = document.createElement('span');
+      name.className = 'chat-row-name';
+      name.textContent = (s.title && s.title.trim()) || 'Новый чат';
+      const sub = document.createElement('span');
+      sub.className = 'chat-row-sub';
+      const count = Number(s.message_count || 0);
+      sub.textContent = count ? `${count} сообщ.` : 'пусто';
+      body.appendChild(name);
+      body.appendChild(sub);
+      row.appendChild(body);
+
+      const right = document.createElement('span');
+      right.style.display = 'inline-flex';
+      right.style.flexDirection = 'column';
+      right.style.alignItems = 'flex-end';
+      right.style.gap = '4px';
+      const time = document.createElement('span');
+      time.className = 'chat-row-time';
+      time.textContent = fmtRowTime(s.updated_at || s.created_at);
+      right.appendChild(time);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'chat-row-menu';
+      del.title = 'Удалить чат';
+      del.setAttribute('aria-label', 'Удалить чат');
+      del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSession(s.id);
+      });
+      right.appendChild(del);
+      row.appendChild(right);
+
+      row.addEventListener('click', () => openSession(s.id));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSession(s.id); }
+      });
+      chatListEl.appendChild(row);
+    }
+  }
+
+  async function loadSessions() {
+    try {
+      const r = await fetch('/api/sessions?client_id=' + encodeURIComponent(CLIENT_ID));
+      const j = await r.json();
+      if (!j.ok) return;
+      sessionsIndex = j.sessions || [];
+      renderSidebar();
+    } catch { /* offline — ignore */ }
+  }
+
+  async function openSession(sid) {
+    if (streaming) return;
+    if (sid === currentSessionId) { toggleSidebar(false); return; }
+    try {
+      const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/messages?client_id=${encodeURIComponent(CLIENT_ID)}`);
+      const j = await r.json();
+      if (!j.ok) return;
+      currentSessionId = sid;
+      messages = [];
+      pending = [];
+      renderPending();
+      chatEl.innerHTML = '';
+      for (const m of (j.messages || [])) {
+        if (m.role === 'user') {
+          messages.push({ role: 'user', content: m.content });
+          appendUserMsg(m.content, []);
+        } else if (m.role === 'assistant') {
+          messages.push({ role: 'assistant', content: m.content });
+          const el = appendBotMsg('');
+          el.innerHTML = renderMarkdown(m.content);
+        }
+      }
+      if (!messages.length) renderWelcome();
+      renderSidebar();
+      toggleSidebar(false);
+    } catch { /* ignore */ }
+  }
+
+  function newChat() {
+    if (streaming) return;
+    currentSessionId = newSessionId();
+    messages = [];
+    pending = [];
+    renderPending();
+    renderWelcome();
+    renderSidebar();
+    toggleSidebar(false);
+    inputEl.focus();
+  }
+
+  async function deleteSession(sid) {
+    if (streaming) return;
+    if (!confirm('Удалить этот чат?')) return;
+    try {
+      const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
+        method: 'DELETE',
+      });
+      const j = await r.json();
+      if (!j.ok) return;
+      if (sid === currentSessionId) {
+        currentSessionId = newSessionId();
+        messages = [];
+        pending = [];
+        renderPending();
+        renderWelcome();
+      }
+      await loadSessions();
+    } catch { /* ignore */ }
+  }
+
+  newChatBtn?.addEventListener('click', newChat);
+
   renderWelcome();
+  renderSidebar();
+  loadSessions();
   inputEl.focus();
 
   // ---------- KB upload ----------

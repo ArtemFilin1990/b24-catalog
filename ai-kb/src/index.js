@@ -365,16 +365,22 @@ async function describeImage(env, image, userQuery) {
 // ============================================================
 // Session helpers (D1)
 // ============================================================
-async function ensureSession(env, sessionId) {
+async function ensureSession(env, sessionId, clientId) {
   if (!sessionId) return null;
   try {
     const existing = await env.DB
-      .prepare('SELECT id FROM chat_sessions WHERE id = ?')
+      .prepare('SELECT id, client_id FROM chat_sessions WHERE id = ?')
       .bind(sessionId).first();
     if (!existing) {
       await env.DB
-        .prepare('INSERT INTO chat_sessions (id, title) VALUES (?, ?)')
-        .bind(sessionId, '').run();
+        .prepare('INSERT INTO chat_sessions (id, title, client_id) VALUES (?, ?, ?)')
+        .bind(sessionId, '', clientId || null).run();
+    } else if (!existing.client_id && clientId) {
+      // Back-fill client_id on a legacy row so it shows up in the user's
+      // sidebar from now on.
+      await env.DB
+        .prepare('UPDATE chat_sessions SET client_id = ? WHERE id = ? AND client_id IS NULL')
+        .bind(clientId, sessionId).run();
     }
     return sessionId;
   } catch { return null; }
@@ -426,6 +432,7 @@ async function handleChat(request, env) {
   if (!lastUser) return jsonErr('No user message');
 
   const sessionId      = String(body?.session_id || '').slice(0, 64) || null;
+  const clientId       = String(body?.client_id  || '').slice(0, 64) || null;
   const attachmentText = String(body?.attachment_text || '').slice(0, MAX_ATTACHMENT_TEXT);
   const rawImages      = Array.isArray(body?.images) ? body.images : [];
   const images         = rawImages.slice(0, MAX_IMAGES).filter(x => x?.dataUrl);
@@ -493,7 +500,7 @@ async function handleChat(request, env) {
     { role: 'user', content: parts.join('\n\n') },
   ];
 
-  if (sessionId) await ensureSession(env, sessionId);
+  if (sessionId) await ensureSession(env, sessionId, clientId);
 
   let stream;
   try {
@@ -570,32 +577,48 @@ async function handleSearch(request, env) {
 async function handleSessions(request, env) {
   const url = new URL(request.url);
 
-  // GET /api/sessions — список
-  if (request.method === 'GET') {
+  const clientId = String(url.searchParams.get('client_id') || '').slice(0, 64) || null;
+  const isAdmin  = requireAdmin(request, env);
+
+  // GET /api/sessions — список. Админ видит все; клиент — только свои.
+  if (request.method === 'GET' && url.pathname === '/api/sessions') {
     const limit  = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
     const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10), 0);
-    const { results } = await env.DB
-      .prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?')
-      .bind(limit, offset).all();
+    if (!isAdmin && !clientId) return jsonErr('client_id required', 400);
+    const q = isAdmin
+      ? env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(limit, offset)
+      : env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions WHERE client_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(clientId, limit, offset);
+    const { results } = await q.all();
     return jsonOk({ sessions: results || [] });
   }
 
-  // GET /api/sessions/:id/messages
+  // GET /api/sessions/:id/messages — owner-check: client_id должен совпасть.
   const m = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
   if (m && request.method === 'GET') {
     const sid = m[1];
-    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
+    if (!isAdmin) {
+      if (!clientId) return jsonErr('client_id required', 400);
+      const row = await env.DB.prepare('SELECT client_id FROM chat_sessions WHERE id = ?').bind(sid).first();
+      if (!row) return jsonErr('Session not found', 404);
+      if (row.client_id !== clientId) return jsonErr('Forbidden', 403);
+    }
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
     const { results } = await env.DB
       .prepare('SELECT id, role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?')
       .bind(sid, limit).all();
     return jsonOk({ messages: results || [] });
   }
 
-  // DELETE /api/sessions/:id
+  // DELETE /api/sessions/:id — owner или admin.
   const del = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (del && request.method === 'DELETE') {
-    if (!requireAdmin(request, env)) return jsonErr('Forbidden', 403);
     const sid = del[1];
+    if (!isAdmin) {
+      if (!clientId) return jsonErr('client_id required', 400);
+      const row = await env.DB.prepare('SELECT client_id FROM chat_sessions WHERE id = ?').bind(sid).first();
+      if (!row) return jsonErr('Session not found', 404);
+      if (row.client_id !== clientId) return jsonErr('Forbidden', 403);
+    }
     await env.DB.batch([
       env.DB.prepare('DELETE FROM chat_messages WHERE session_id = ?').bind(sid),
       env.DB.prepare('DELETE FROM chat_sessions WHERE id = ?').bind(sid),
