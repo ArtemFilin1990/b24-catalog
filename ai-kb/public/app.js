@@ -279,19 +279,59 @@
   const attachedListEl = $('#attached-list');
   const micBtn = $('#mic-btn');
 
-  const SUGGESTIONS = [
-    'Аналоги ГОСТ',
-    'Запросить цену',
-    'Расшифруй маркировку',
-    'Подбор по размерам',
+  // Quick-action buttons. Order + labels are part of the UX contract —
+  // each maps to a "mode" that controls the input placeholder and an
+  // optional starter prefill. Modes are client-side only (no server
+  // coupling); sending a message just sends the resulting text.
+  const DEFAULT_PLACEHOLDER = 'Написать сообщение…';
+  const QUICK_MODES = [
+    {
+      id: 'gost',
+      label: 'Аналоги ГОСТ',
+      placeholder: 'Введи ISO, бренд или маркировку для подбора ГОСТ-аналога',
+      starter: 'Подбери ГОСТ-аналог: ',
+    },
+    {
+      id: 'iso',
+      label: 'Аналоги ISO',
+      placeholder: 'Введи ГОСТ, бренд или маркировку для подбора ISO-аналога',
+      starter: 'Подбери ISO-аналог: ',
+    },
+    {
+      id: 'marking',
+      label: 'Расшифруй маркировку',
+      placeholder: 'Введи маркировку подшипника для расшифровки',
+      starter: 'Расшифруй маркировку: ',
+    },
   ];
+  let activeMode = null; // null = freeform
 
-  const SUGGESTION_PROMPTS = {
-    'Аналоги ГОСТ': 'Подбери ГОСТ-аналог по маркировке: ',
-    'Запросить цену': 'Запросить цену на подшипник ',
-    'Расшифруй маркировку': 'Расшифруй маркировку ',
-    'Подбор по размерам': 'Нужен подшипник с размерами d=_, D=_, B=_, тип _',
-  };
+  function setMode(modeId, { focus = true } = {}) {
+    const mode = QUICK_MODES.find(m => m.id === modeId) || null;
+    activeMode = mode ? mode.id : null;
+    // Update placeholder + any chip-row buttons (welcome screen or
+    // inline prompt list) so the active chip shows a selected state.
+    inputEl.placeholder = mode ? mode.placeholder : DEFAULT_PLACEHOLDER;
+    document.querySelectorAll('.chip[data-mode]').forEach(b => {
+      b.classList.toggle('active', mode && b.dataset.mode === mode.id);
+      b.setAttribute('aria-pressed', String(mode && b.dataset.mode === mode.id));
+    });
+    // Optional starter prefill — only when input is empty so we don't
+    // clobber what the user is typing. We never auto-send: the repo
+    // doesn't auto-send today and the task forbids introducing it.
+    if (mode && !inputEl.value.trim()) {
+      inputEl.value = mode.starter;
+      autoresize();
+    }
+    if (focus) {
+      inputEl.focus();
+      // Place caret at end so the user types after the starter.
+      try {
+        const n = inputEl.value.length;
+        inputEl.setSelectionRange(n, n);
+      } catch { /* ignore */ }
+    }
+  }
 
   let messages = [];
   let pending = [];
@@ -300,7 +340,15 @@
   let sessionsIndex = [];                  // last /api/sessions payload
 
   function scrollToBottom() {
-    requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    // Messages render inside the .chat container which has its own
+    // overflow-y: auto on desktop (so the sticky header + composer stay
+    // visible while the list scrolls). On mobile the whole body scrolls
+    // because the composer is `position: sticky; bottom: 0`. Scroll both
+    // to cover either layout — the inactive one is a no-op.
+    requestAnimationFrame(() => {
+      if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    });
   }
 
   function autoresize() {
@@ -404,16 +452,14 @@
     topicsMsg.appendChild(label);
     const chips = document.createElement('div');
     chips.className = 'chip-row';
-    for (const q of SUGGESTIONS) {
+    for (const q of QUICK_MODES) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'chip';
-      b.textContent = q;
-      b.addEventListener('click', () => {
-        inputEl.value = SUGGESTION_PROMPTS[q] || q;
-        autoresize();
-        inputEl.focus();
-      });
+      b.className = 'chip' + (activeMode === q.id ? ' active' : '');
+      b.dataset.mode = q.id;
+      b.setAttribute('aria-pressed', String(activeMode === q.id));
+      b.textContent = q.label;
+      b.addEventListener('click', () => setMode(q.id));
       chips.appendChild(b);
     }
     topicsMsg.appendChild(chips);

@@ -58,7 +58,9 @@ body {
   border-radius: 24px;
   box-shadow: var(--shadow-md);
   overflow: hidden;
-  min-height: calc(100vh - 48px);
+  /* Pin the shell to the viewport so sidebar and main panel scroll
+     independently instead of the whole page growing with the chat. */
+  height: calc(100vh - 48px);
 }
 
 /* ---------- Sidebar ---------- */
@@ -67,6 +69,9 @@ body {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border);
+  /* Cap to shell height so the chat-list below can scroll independently. */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-head {
@@ -131,7 +136,13 @@ body {
 .sidebar-icon-btn:hover { background: rgba(0,0,0,0.05); color: var(--ink); }
 .sidebar-icon-btn svg { width: 20px; height: 20px; }
 
-.chat-list { padding: 4px 12px; }
+.chat-list {
+  padding: 4px 12px;
+  /* Sidebar is a bounded flex column — grow to fill and scroll inside. */
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
 
 .chat-row {
   display: grid;
@@ -181,8 +192,9 @@ body {
 }
 .chat-row-avatar svg { width: 26px; height: 26px; }
 
-.chat-row-body { min-width: 0; }
+.chat-row-body { min-width: 0; display: block; }
 .chat-row-name {
+  display: block;
   font-weight: 600;
   font-size: 15px;
   color: var(--ink);
@@ -191,6 +203,7 @@ body {
   text-overflow: ellipsis;
 }
 .chat-row-sub {
+  display: block;
   font-size: 12.5px;
   color: var(--muted);
   white-space: nowrap;
@@ -467,6 +480,10 @@ body {
 }
 .chip:hover { background: var(--brand-dark); }
 .chip:active { transform: scale(0.97); }
+.chip.active {
+  background: var(--brand-dark);
+  box-shadow: 0 0 0 2px var(--brand), 0 2px 6px rgba(199,67,38,0.32);
+}
 
 /* ---------- Composer ---------- */
 .composer {
@@ -989,6 +1006,9 @@ body {
     grid-template-columns: 1fr;
     margin: 0;
     min-height: 100vh;
+    /* Mobile uses document scroll (sticky composer at the bottom), so
+       release the desktop viewport-pin. */
+    height: auto;
     border-radius: 0;
     box-shadow: none;
     overflow: visible;
@@ -1003,6 +1023,8 @@ body {
     transition: transform 220ms ease;
     border-right: none;
     box-shadow: 6px 0 24px rgba(0,0,0,0.12);
+    /* Fixed sidebar is already viewport-bounded — keep chat-list scroll. */
+    overflow: hidden;
   }
   .sidebar.open { transform: translateX(0); }
   .shell.sidebar-open::before {
