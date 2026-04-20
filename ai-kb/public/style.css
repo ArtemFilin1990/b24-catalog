@@ -23,6 +23,12 @@
 
 * { box-sizing: border-box; }
 
+/* The UA-default `[hidden] { display: none }` loses to any class-based
+   `display` rule we write (same specificity, later wins). Force-hide with
+   !important so `element.hidden = true` always actually hides — applies to
+   auth overlay, back button, stats badge, inline status elements, etc. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
