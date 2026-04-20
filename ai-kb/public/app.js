@@ -1,6 +1,48 @@
 (function () {
   const $ = (sel) => document.querySelector(sel);
 
+  // ---------- Auth state ----------
+  // After login/register the server returns an opaque Bearer token that
+  // ties all this browser's requests to a user account. Token + display
+  // name live in localStorage so reloads keep the same identity.
+  const AUTH_TOKEN_KEY = 'ai-kb-auth-token';
+  const AUTH_USER_KEY  = 'ai-kb-auth-username';
+  function getToken() {
+    try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch { return ''; }
+  }
+  function getUsername() {
+    try { return localStorage.getItem(AUTH_USER_KEY) || ''; } catch { return ''; }
+  }
+  function setAuth(token, username) {
+    try {
+      localStorage.setItem(AUTH_TOKEN_KEY, token || '');
+      localStorage.setItem(AUTH_USER_KEY, username || '');
+    } catch {}
+  }
+  function clearAuth() {
+    try {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.removeItem(AUTH_USER_KEY);
+    } catch {}
+  }
+  // Wrapper so every request carries the Bearer token and auto-surfaces
+  // a fresh login modal if the server says the token is gone.
+  async function authFetch(url, options = {}) {
+    const token = getToken();
+    const headers = Object.assign({}, options.headers || {});
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const r = await fetch(url, Object.assign({}, options, { headers }));
+    if (r.status === 401) {
+      clearAuth();
+      showAuthModal();
+    }
+    return r;
+  }
+  function newSessionId() {
+    return (crypto?.randomUUID && crypto.randomUUID()) ||
+      ('s-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  }
+
   // ---------- View routing ----------
   const views = { chat: $('#view-chat'), upload: $('#view-upload') };
   const headerTitle = $('#header-title');
@@ -253,6 +295,8 @@
   let messages = [];
   let pending = [];
   let streaming = false;
+  let currentSessionId = newSessionId();   // fresh chat by default
+  let sessionsIndex = [];                  // last /api/sessions payload
 
   function scrollToBottom() {
     requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
@@ -512,11 +556,12 @@
     setStreaming(true);
 
     try {
-      const resp = await fetch('/api/chat', {
+      const resp = await authFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages,
+          session_id: currentSessionId,
           attachment_text: attachmentText || undefined,
           images: imgAttachments.map(p => ({ name: p.name, dataUrl: p.dataUrl })),
         }),
@@ -571,6 +616,9 @@
       if (botText) botEl.innerHTML = renderMarkdown(botText);
       else botEl.textContent = '(пустой ответ)';
       messages.push({ role: 'assistant', content: botText });
+      // Refresh sidebar so the just-persisted session shows up with its
+      // auto-generated title. Runs after the stream body is fully consumed.
+      loadSessions();
     } catch (e) {
       cursor.remove();
       botEl.parentElement?.remove();
@@ -598,7 +646,289 @@
   });
   inputEl.addEventListener('input', autoresize);
 
+  // ---------- Sidebar: chat list ----------
+  const chatListEl = $('#chat-list');
+  const newChatBtn = $('#new-chat-btn');
+
+  function fmtRowTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const daysAgo = Math.floor((now - d) / 86400000);
+    if (daysAgo < 7) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  }
+
+  function renderSidebar() {
+    chatListEl.innerHTML = '';
+    if (!sessionsIndex.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-list-empty';
+      empty.textContent = 'Пока пусто. Задайте первый вопрос — чат появится здесь.';
+      chatListEl.appendChild(empty);
+      return;
+    }
+    for (const s of sessionsIndex) {
+      // Row is a div (not button) because it contains a nested delete button —
+      // nesting <button> inside <button> is invalid HTML and browsers collapse
+      // the inner click in unpredictable ways.
+      const row = document.createElement('div');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.className = 'chat-row' + (s.id === currentSessionId ? ' active' : '');
+      row.dataset.sid = s.id;
+
+      const avatar = document.createElement('span');
+      avatar.className = 'chat-row-avatar';
+      avatar.innerHTML = AVATAR_SVG;
+      row.appendChild(avatar);
+
+      const body = document.createElement('span');
+      body.className = 'chat-row-body';
+      const name = document.createElement('span');
+      name.className = 'chat-row-name';
+      name.textContent = (s.title && s.title.trim()) || 'Новый чат';
+      const sub = document.createElement('span');
+      sub.className = 'chat-row-sub';
+      const count = Number(s.message_count || 0);
+      sub.textContent = count ? `${count} сообщ.` : 'пусто';
+      body.appendChild(name);
+      body.appendChild(sub);
+      row.appendChild(body);
+
+      const right = document.createElement('span');
+      right.style.display = 'inline-flex';
+      right.style.flexDirection = 'column';
+      right.style.alignItems = 'flex-end';
+      right.style.gap = '4px';
+      const time = document.createElement('span');
+      time.className = 'chat-row-time';
+      time.textContent = fmtRowTime(s.updated_at || s.created_at);
+      right.appendChild(time);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'chat-row-menu';
+      del.title = 'Удалить чат';
+      del.setAttribute('aria-label', 'Удалить чат');
+      del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSession(s.id);
+      });
+      right.appendChild(del);
+      row.appendChild(right);
+
+      row.addEventListener('click', () => openSession(s.id));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSession(s.id); }
+      });
+      chatListEl.appendChild(row);
+    }
+  }
+
+  async function loadSessions() {
+    if (!getToken()) return;
+    try {
+      const r = await authFetch('/api/sessions');
+      const j = await r.json();
+      if (!j.ok) return;
+      sessionsIndex = j.sessions || [];
+      renderSidebar();
+    } catch { /* offline — ignore */ }
+  }
+
+  async function openSession(sid) {
+    if (streaming) return;
+    if (sid === currentSessionId) { toggleSidebar(false); return; }
+    try {
+      const r = await authFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`);
+      const j = await r.json();
+      if (!j.ok) return;
+      currentSessionId = sid;
+      messages = [];
+      pending = [];
+      renderPending();
+      chatEl.innerHTML = '';
+      for (const m of (j.messages || [])) {
+        if (m.role === 'user') {
+          messages.push({ role: 'user', content: m.content });
+          appendUserMsg(m.content, []);
+        } else if (m.role === 'assistant') {
+          messages.push({ role: 'assistant', content: m.content });
+          const el = appendBotMsg('');
+          el.innerHTML = renderMarkdown(m.content);
+        }
+      }
+      if (!messages.length) renderWelcome();
+      renderSidebar();
+      toggleSidebar(false);
+    } catch { /* ignore */ }
+  }
+
+  function newChat() {
+    if (streaming) return;
+    currentSessionId = newSessionId();
+    messages = [];
+    pending = [];
+    renderPending();
+    renderWelcome();
+    renderSidebar();
+    toggleSidebar(false);
+    inputEl.focus();
+  }
+
+  async function deleteSession(sid) {
+    if (streaming) return;
+    if (!confirm('Удалить этот чат?')) return;
+    try {
+      const r = await authFetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+        method: 'DELETE',
+      });
+      const j = await r.json();
+      if (!j.ok) return;
+      if (sid === currentSessionId) {
+        currentSessionId = newSessionId();
+        messages = [];
+        pending = [];
+        renderPending();
+        renderWelcome();
+      }
+      await loadSessions();
+    } catch { /* ignore */ }
+  }
+
+  newChatBtn?.addEventListener('click', newChat);
+
+  // ---------- Auth modal ----------
+  const authOverlay = $('#auth-overlay');
+  const authForm = $('#auth-form');
+  const authUsername = $('#auth-username');
+  const authPassword = $('#auth-password');
+  const authError = $('#auth-error');
+  const authSubmit = $('#auth-submit');
+  const authHint = $('#auth-hint');
+  const authTabs = authOverlay?.querySelectorAll('.auth-tab') || [];
+  const headerUser = $('#header-user');
+  const headerUserName = $('#header-user-name');
+  const logoutBtn = $('#logout-btn');
+
+  let authMode = 'login';
+
+  function setAuthMode(mode) {
+    authMode = mode === 'register' ? 'register' : 'login';
+    authTabs.forEach(t => t.classList.toggle('active', t.dataset.tab === authMode));
+    authSubmit.textContent = authMode === 'register' ? 'Создать аккаунт' : 'Войти';
+    authHint.textContent = authMode === 'register'
+      ? 'Уже есть аккаунт? Переключитесь на «Войти» выше.'
+      : 'Нет аккаунта? Переключитесь на «Регистрация» выше.';
+    authPassword.setAttribute(
+      'autocomplete', authMode === 'register' ? 'new-password' : 'current-password'
+    );
+    setAuthError('');
+  }
+
+  function setAuthError(msg) {
+    authError.textContent = msg || '';
+    authError.hidden = !msg;
+  }
+
+  function showAuthModal() {
+    setAuthError('');
+    authOverlay.hidden = false;
+    headerUser.hidden = true;
+    setTimeout(() => authUsername?.focus(), 50);
+  }
+
+  function hideAuthModal() {
+    authOverlay.hidden = true;
+  }
+
+  function applyUserToHeader(username) {
+    if (!username) { headerUser.hidden = true; return; }
+    headerUserName.textContent = username;
+    headerUser.hidden = false;
+  }
+
+  authTabs.forEach(t => t.addEventListener('click', () => setAuthMode(t.dataset.tab)));
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+    if (!username || !password) { setAuthError('Заполните оба поля'); return; }
+    authSubmit.disabled = true;
+    setAuthError('');
+    try {
+      const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+      if (!j.ok || !j.token) {
+        setAuthError(j.error || 'Не удалось войти');
+        return;
+      }
+      setAuth(j.token, j.username || username);
+      applyUserToHeader(j.username || username);
+      hideAuthModal();
+      authPassword.value = '';
+      currentSessionId = newSessionId();
+      messages = [];
+      pending = [];
+      renderPending();
+      renderWelcome();
+      await loadSessions();
+      inputEl.focus();
+    } catch (err) {
+      setAuthError('Ошибка сети: ' + (err?.message || err));
+    } finally {
+      authSubmit.disabled = false;
+    }
+  });
+
+  logoutBtn?.addEventListener('click', async () => {
+    try { await authFetch('/api/auth/logout', { method: 'POST' }); } catch {}
+    clearAuth();
+    messages = [];
+    pending = [];
+    sessionsIndex = [];
+    renderPending();
+    renderSidebar();
+    renderWelcome();
+    applyUserToHeader('');
+    showAuthModal();
+  });
+
+  async function bootstrapAuth() {
+    const token = getToken();
+    if (!token) { showAuthModal(); return; }
+    try {
+      const r = await fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) { clearAuth(); showAuthModal(); return; }
+      const j = await r.json();
+      if (!j.ok) { clearAuth(); showAuthModal(); return; }
+      setAuth(token, j.username || getUsername());
+      applyUserToHeader(j.username || getUsername());
+      hideAuthModal();
+      await loadSessions();
+    } catch {
+      // Network error on bootstrap: keep the user signed-in optimistically
+      // (no hard boot-out on flaky connection). Requests will re-surface
+      // the modal on 401 later.
+      applyUserToHeader(getUsername());
+      hideAuthModal();
+    }
+  }
+
   renderWelcome();
+  renderSidebar();
+  setAuthMode('login');
+  bootstrapAuth();
   inputEl.focus();
 
   // ---------- KB upload ----------
