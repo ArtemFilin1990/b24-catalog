@@ -147,11 +147,59 @@ function requireAdmin(request, env) {
 // ============================================================
 // /api/auth — simple username/password auth
 // ============================================================
+
+// Self-heal for the auth + chat_sessions.client_id schema — same pattern as
+// handleSetSettings uses for the `settings` table. If migrations 0006 /
+// 0007 haven't been applied on a deployed worker, users hit "no such table:
+// users" or "no such column: client_id" the moment they try to sign in or
+// chat. Creating the missing pieces lazily on first use unblocks them
+// without waiting for an out-of-band migration run. Still ship the
+// migration files for fresh D1 bootstraps — never rely solely on this.
+let authTablesReady = false;
+async function ensureAuthTables(env) {
+  if (authTablesReady) return;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS users (
+           id             TEXT PRIMARY KEY,
+           username       TEXT NOT NULL UNIQUE,
+           password_hash  TEXT NOT NULL,
+           password_salt  TEXT NOT NULL,
+           created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+         )`
+      ),
+      env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)'),
+      env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS user_sessions (
+           token       TEXT PRIMARY KEY,
+           user_id     TEXT NOT NULL,
+           created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+           expires_at  DATETIME NOT NULL
+         )`
+      ),
+      env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions (user_id)'),
+      env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_user_sessions_exp  ON user_sessions (expires_at)'),
+    ]);
+    // Separately: chat_sessions.client_id (migration 0006). ALTER TABLE ADD
+    // COLUMN is not idempotent, so probe via PRAGMA table_info first.
+    try {
+      const info = await env.DB.prepare('PRAGMA table_info(chat_sessions)').all();
+      const has = (info.results || []).some(r => r.name === 'client_id');
+      if (!has) {
+        await env.DB.prepare('ALTER TABLE chat_sessions ADD COLUMN client_id TEXT').run();
+        await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sessions_client ON chat_sessions (client_id, updated_at DESC)').run();
+      }
+    } catch { /* chat_sessions might not exist yet on a wholly fresh DB */ }
+    authTablesReady = true;
+  } catch { /* best-effort; next call retries */ }
+}
 async function handleAuthRegister(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
   const v = validateCredentials(body);
   if (v.error) return jsonErr(v.error, 400);
+  await ensureAuthTables(env);
   try {
     const existing = await env.DB
       .prepare('SELECT id FROM users WHERE username = ?').bind(v.username).first();
@@ -174,6 +222,7 @@ async function handleAuthLogin(request, env) {
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
   const v = validateCredentials(body);
   if (v.error) return jsonErr(v.error, 400);
+  await ensureAuthTables(env);
   try {
     const row = await env.DB.prepare(
       'SELECT id, password_hash, password_salt FROM users WHERE username = ?'
