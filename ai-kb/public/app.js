@@ -279,59 +279,6 @@
   const attachedListEl = $('#attached-list');
   const micBtn = $('#mic-btn');
 
-  // Quick-action buttons. Order + labels are part of the UX contract —
-  // each maps to a "mode" that controls the input placeholder and an
-  // optional starter prefill. Modes are client-side only (no server
-  // coupling); sending a message just sends the resulting text.
-  const DEFAULT_PLACEHOLDER = 'Написать сообщение…';
-  const QUICK_MODES = [
-    {
-      id: 'gost',
-      label: 'Аналоги ГОСТ',
-      placeholder: 'Введи ISO, бренд или маркировку для подбора ГОСТ-аналога',
-      starter: 'Подбери ГОСТ-аналог: ',
-    },
-    {
-      id: 'iso',
-      label: 'Аналоги ISO',
-      placeholder: 'Введи ГОСТ, бренд или маркировку для подбора ISO-аналога',
-      starter: 'Подбери ISO-аналог: ',
-    },
-    {
-      id: 'marking',
-      label: 'Расшифруй маркировку',
-      placeholder: 'Введи маркировку подшипника для расшифровки',
-      starter: 'Расшифруй маркировку: ',
-    },
-  ];
-  let activeMode = null; // null = freeform
-
-  function setMode(modeId, { focus = true } = {}) {
-    const mode = QUICK_MODES.find(m => m.id === modeId) || null;
-    activeMode = mode ? mode.id : null;
-    // Update placeholder + any chip-row buttons (welcome screen or
-    // inline prompt list) so the active chip shows a selected state.
-    inputEl.placeholder = mode ? mode.placeholder : DEFAULT_PLACEHOLDER;
-    document.querySelectorAll('.chip[data-mode]').forEach(b => {
-      b.classList.toggle('active', mode && b.dataset.mode === mode.id);
-      b.setAttribute('aria-pressed', String(mode && b.dataset.mode === mode.id));
-    });
-    // Optional starter prefill — only when input is empty so we don't
-    // clobber what the user is typing. We never auto-send: the repo
-    // doesn't auto-send today and the task forbids introducing it.
-    if (mode && !inputEl.value.trim()) {
-      inputEl.value = mode.starter;
-      autoresize();
-    }
-    if (focus) {
-      inputEl.focus();
-      // Place caret at end so the user types after the starter.
-      try {
-        const n = inputEl.value.length;
-        inputEl.setSelectionRange(n, n);
-      } catch { /* ignore */ }
-    }
-  }
 
   let messages = [];
   let pending = [];
