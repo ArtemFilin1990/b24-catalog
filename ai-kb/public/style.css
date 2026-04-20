@@ -864,6 +864,11 @@ body {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
+/* The [hidden] attribute normally sets display:none via UA styles, but our
+   own `.auth-overlay { display: flex }` rule overrides that — so when JS
+   does authOverlay.hidden = true after a successful login, the modal stays
+   visible and blocks the chat. Force-hide when the attribute is present. */
+.auth-overlay[hidden] { display: none; }
 
 .auth-card {
   background: #fff;
