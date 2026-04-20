@@ -171,11 +171,16 @@ async function ensureAuthTables(env) {
       ),
       env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)'),
       env.DB.prepare(
+        // FK mirrors migration 0007_users_auth.sql. D1 ignores FK constraints
+        // unless PRAGMA foreign_keys = ON is set for the connection — but we
+        // still declare it so the two schema sources stay in lockstep (any
+        // tooling that introspects table DDL sees the same structure).
         `CREATE TABLE IF NOT EXISTS user_sessions (
            token       TEXT PRIMARY KEY,
            user_id     TEXT NOT NULL,
            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-           expires_at  DATETIME NOT NULL
+           expires_at  DATETIME NOT NULL,
+           FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
          )`
       ),
       env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions (user_id)'),
