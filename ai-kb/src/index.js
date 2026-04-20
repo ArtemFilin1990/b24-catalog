@@ -624,9 +624,9 @@ async function handleChat(request, env, ctx) {
     if (desc) imageDescs.push(`📷 ${String(img.name || 'image').slice(0, 80)}: ${desc}`);
   }
 
-  const ctx = buildContext(catalogRows, kbMatches);
+  const contextText = buildContext(catalogRows, kbMatches);
   const parts = [];
-  if (ctx)               parts.push('Контекст:\n' + ctx);
+  if (contextText)       parts.push('Контекст:\n' + contextText);
   if (geoRows.length) {
     const lines = geoRows.map(r => '- ' + geoRowToText(r));
     parts.push(`Точные геометрические аналоги (d=${dims.d_inner} D=${dims.d_outer} B=${dims.width}):\n${lines.join('\n')}`);

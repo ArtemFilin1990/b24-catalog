@@ -279,20 +279,6 @@
   const attachedListEl = $('#attached-list');
   const micBtn = $('#mic-btn');
 
-  const SUGGESTIONS = [
-    'Аналоги ГОСТ',
-    'Аналоги ISO',
-    'Расшифруй маркировку',
-  ];
-
-  const SUGGESTION_PROMPTS = {
-    // Direction-aware prompts: the chip tells the bot which system the
-    // user WANTS BACK, and the example makes clear which system they're
-    // supplying — matches the one-way translation rule in AI_SYSTEM.
-    'Аналоги ГОСТ':        'Подбери ГОСТ-аналог по ISO-маркировке: ',
-    'Аналоги ISO':         'Подбери ISO-аналог по ГОСТ-маркировке: ',
-    'Расшифруй маркировку': 'Расшифруй маркировку ',
-  };
 
   let messages = [];
   let pending = [];
@@ -301,7 +287,15 @@
   let sessionsIndex = [];                  // last /api/sessions payload
 
   function scrollToBottom() {
-    requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    // Messages render inside the .chat container which has its own
+    // overflow-y: auto on desktop (so the sticky header + composer stay
+    // visible while the list scrolls). On mobile the whole body scrolls
+    // because the composer is `position: sticky; bottom: 0`. Scroll both
+    // to cover either layout — the inactive one is a no-op.
+    requestAnimationFrame(() => {
+      if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    });
   }
 
   function autoresize() {
@@ -405,16 +399,14 @@
     topicsMsg.appendChild(label);
     const chips = document.createElement('div');
     chips.className = 'chip-row';
-    for (const q of SUGGESTIONS) {
+    for (const q of QUICK_MODES) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'chip';
-      b.textContent = q;
-      b.addEventListener('click', () => {
-        inputEl.value = SUGGESTION_PROMPTS[q] || q;
-        autoresize();
-        inputEl.focus();
-      });
+      b.className = 'chip' + (activeMode === q.id ? ' active' : '');
+      b.dataset.mode = q.id;
+      b.setAttribute('aria-pressed', String(activeMode === q.id));
+      b.textContent = q.label;
+      b.addEventListener('click', () => setMode(q.id));
       chips.appendChild(b);
     }
     topicsMsg.appendChild(chips);
