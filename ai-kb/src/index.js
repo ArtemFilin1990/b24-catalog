@@ -557,7 +557,7 @@ async function logQuery(env, sessionId, question, answerLen, sourcesCat, sources
 // ============================================================
 // /api/chat — основной endpoint (SSE стриминг)
 // ============================================================
-async function handleChat(request, env) {
+async function handleChat(request, env, ctx) {
   let body;
   try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
 
@@ -662,8 +662,11 @@ async function handleChat(request, env) {
   const [streamA, streamB] = stream.tee();
   const sources = catalogRows.length + kbMatches.length + geoRows.length;
 
-  // Асинхронно собираем ответ и пишем в D1
-  (async () => {
+  // Асинхронно собираем ответ и пишем в D1.
+  // ctx.waitUntil держит изолят живым до завершения записи — без него
+  // Workers может завершить воркер сразу после закрытия SSE-потока и
+  // потерять историю сообщений и query_log.
+  const persist = (async () => {
     try {
       const reader = streamB.getReader();
       const decoder = new TextDecoder();
@@ -688,6 +691,7 @@ async function handleChat(request, env) {
       await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
     } catch { /* не критично */ }
   })();
+  if (ctx?.waitUntil) ctx.waitUntil(persist);
 
   return new Response(streamA, {
     headers: {
@@ -935,7 +939,7 @@ function chunkText(text, size = CHUNK_CHARS, overlap = CHUNK_OVERLAP) {
 // Router
 // ============================================================
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url    = new URL(request.url);
     const path   = url.pathname;
     const method = request.method;
@@ -950,7 +954,7 @@ export default {
         const rl = await checkRate(env.DB, bucketForRequest(request, 'chat'), 30, 60);
         if (!rl.allowed) return rateLimitedResponse(rl);
       }
-      return handleChat(request, env);
+      return handleChat(request, env, ctx);
     }
 
     // /api/auth — register/login/logout/me. Rate-limit register+login
