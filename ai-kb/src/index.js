@@ -365,7 +365,9 @@ async function describeImage(env, image, userQuery) {
 // ============================================================
 // Session helpers (D1)
 // ============================================================
-async function ensureSession(env, sessionId, clientId) {
+// Returns sessionId on success, 'forbidden' on ownership mismatch, null on
+// DB error / missing sessionId. Admin bypasses the ownership check.
+async function ensureSession(env, sessionId, clientId, isAdmin) {
   if (!sessionId) return null;
   try {
     const existing = await env.DB
@@ -381,6 +383,10 @@ async function ensureSession(env, sessionId, clientId) {
       await env.DB
         .prepare('UPDATE chat_sessions SET client_id = ? WHERE id = ? AND client_id IS NULL')
         .bind(clientId, sessionId).run();
+    } else if (existing.client_id && existing.client_id !== clientId && !isAdmin) {
+      // Ownership mismatch: session is owned by another browser and the
+      // caller is not admin. Block the write to prevent session-UUID hijack.
+      return 'forbidden';
     }
     return sessionId;
   } catch { return null; }
@@ -433,6 +439,7 @@ async function handleChat(request, env) {
 
   const sessionId      = String(body?.session_id || '').slice(0, 64) || null;
   const clientId       = String(body?.client_id  || '').slice(0, 64) || null;
+  const isAdmin        = requireAdmin(request, env);
   const attachmentText = String(body?.attachment_text || '').slice(0, MAX_ATTACHMENT_TEXT);
   const rawImages      = Array.isArray(body?.images) ? body.images : [];
   const images         = rawImages.slice(0, MAX_IMAGES).filter(x => x?.dataUrl);
@@ -500,7 +507,10 @@ async function handleChat(request, env) {
     { role: 'user', content: parts.join('\n\n') },
   ];
 
-  if (sessionId) await ensureSession(env, sessionId, clientId);
+  if (sessionId) {
+    const sid = await ensureSession(env, sessionId, clientId, isAdmin);
+    if (sid === 'forbidden') return jsonErr('Forbidden', 403);
+  }
 
   let stream;
   try {
@@ -585,7 +595,10 @@ async function handleSessions(request, env) {
     const limit  = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
     const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10), 0);
     if (!isAdmin && !clientId) return jsonErr('client_id required', 400);
-    const q = isAdmin
+    // Admin sees everything only when they omit client_id. If an admin also
+    // passes client_id (as the UI always does), filter to their own history
+    // so their sidebar isn't flooded with every chat in the DB.
+    const q = (isAdmin && !clientId)
       ? env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(limit, offset)
       : env.DB.prepare('SELECT id, title, message_count, created_at, updated_at FROM chat_sessions WHERE client_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?').bind(clientId, limit, offset);
     const { results } = await q.all();
