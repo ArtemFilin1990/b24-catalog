@@ -952,6 +952,9 @@
   const pMaxTok = $('#p-maxtok');
   const pCatK = $('#p-catk');
   const pVecK = $('#p-veck');
+  const pWebK = $('#p-webk');
+  const pAutolearn = $('#p-autolearn');
+  const pAutolearnUsers = $('#p-autolearn-users');
   const paramsSaveBtn = $('#params-save');
   const paramsStatus = $('#params-status');
 
@@ -981,6 +984,9 @@
       if (pMaxTok) pMaxTok.value = s.max_tokens || '';
       if (pCatK) pCatK.value = s.catalog_topk || '';
       if (pVecK) pVecK.value = s.vector_topk || '';
+      if (pWebK) pWebK.value = s.web_search_topk ?? '';
+      if (pAutolearn) pAutolearn.value = s.web_autolearn_enabled ?? '';
+      if (pAutolearnUsers) pAutolearnUsers.value = s.autolearn_allowed_users ?? '';
       settingsLoaded = true;
     } catch { /* ignore */ }
   }
@@ -1027,6 +1033,9 @@
       max_tokens: pMaxTok?.value?.trim() || '',
       catalog_topk: pCatK?.value?.trim() || '',
       vector_topk: pVecK?.value?.trim() || '',
+      web_search_topk: pWebK?.value?.trim() ?? '',
+      web_autolearn_enabled: pAutolearn?.value?.trim() ?? '',
+      autolearn_allowed_users: pAutolearnUsers?.value?.trim() ?? '',
     };
     saveSettings(patch, paramsStatus);
   });
