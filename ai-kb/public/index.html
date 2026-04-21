@@ -176,6 +176,10 @@
                 <span>Авто-обучение из веба (1 = вкл, 0 = выкл)</span>
                 <input id="p-autolearn" type="number" step="1" min="0" max="1" placeholder="1" />
               </label>
+              <label class="field span-2">
+                <span>Пользователи, которым разрешено авто-обучение (через запятую; пусто = только админ)</span>
+                <input id="p-autolearn-users" type="text" placeholder="admin, inzhener1, menedzher" />
+              </label>
               <div class="row-actions span-2">
                 <button id="params-save" type="button" class="primary-btn">Сохранить параметры</button>
                 <span id="params-status" class="inline-status" hidden></span>

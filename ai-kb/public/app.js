@@ -954,6 +954,7 @@
   const pVecK = $('#p-veck');
   const pWebK = $('#p-webk');
   const pAutolearn = $('#p-autolearn');
+  const pAutolearnUsers = $('#p-autolearn-users');
   const paramsSaveBtn = $('#params-save');
   const paramsStatus = $('#params-status');
 
@@ -985,6 +986,7 @@
       if (pVecK) pVecK.value = s.vector_topk || '';
       if (pWebK) pWebK.value = s.web_search_topk ?? '';
       if (pAutolearn) pAutolearn.value = s.web_autolearn_enabled ?? '';
+      if (pAutolearnUsers) pAutolearnUsers.value = s.autolearn_allowed_users ?? '';
       settingsLoaded = true;
     } catch { /* ignore */ }
   }
@@ -1033,6 +1035,7 @@
       vector_topk: pVecK?.value?.trim() || '',
       web_search_topk: pWebK?.value?.trim() ?? '',
       web_autolearn_enabled: pAutolearn?.value?.trim() ?? '',
+      autolearn_allowed_users: pAutolearnUsers?.value?.trim() ?? '',
     };
     saveSettings(patch, paramsStatus);
   });

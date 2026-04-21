@@ -296,6 +296,11 @@ const SETTING_KEYS = new Set([
   // Vectorize so the same question is answered from local RAG next time.
   // "0" disables. Admin-toggleable via the settings UI.
   'web_autolearn_enabled',
+  // Comma-separated list of usernames whose chats also trigger auto-ingest
+  // (in addition to X-Admin-Token admins). Empty → admin-only. Keeps
+  // /api/ingest's write-to-KB boundary narrow while letting the UI (which
+  // only ships Bearer) actually exercise the self-learn path.
+  'autolearn_allowed_users',
 ]);
 
 // Schema lives in ai-kb/migrations/0005_settings.sql — no lazy DDL here.
@@ -332,6 +337,7 @@ async function handleGetSettings(env) {
     vector_topk: String(VECTOR_TOPK),
     web_search_topk: String(WEB_SEARCH_TOPK),
     web_autolearn_enabled: '1',
+    autolearn_allowed_users: '',
     _overrides: {},
   };
   for (const r of results || []) {
@@ -648,6 +654,14 @@ async function handleChat(request, env, ctx) {
   const webNum      = parseInt(sMap.web_search_topk ?? WEB_SEARCH_TOPK, 10);
   const webTopK     = Math.max(0, Math.min(10, Number.isFinite(webNum) ? webNum : WEB_SEARCH_TOPK));
   const autolearn   = String(sMap.web_autolearn_enabled ?? '1') !== '0';
+  // Usernames explicitly allowed to trigger auto-ingest (comma-separated,
+  // case-sensitive). Empty → admin-only. The shipped UI sends Bearer user
+  // tokens, not X-Admin-Token, so without an allowlist auto-learn never
+  // fires from real chats — that's the bug Codex flagged.
+  const allowedAutolearnUsers = new Set(
+    String(sMap.autolearn_allowed_users ?? '')
+      .split(',').map(s => s.trim()).filter(Boolean)
+  );
 
   // If the user wrote dimensions like "25x52x15" AND a type hint
   // (e.g. NU205 / 6205 / 32205), do a strict geometric lookup in
@@ -763,16 +777,20 @@ async function handleChat(request, env, ctx) {
       // knowledge_base + Vectorize so subsequent identical questions
       // are answered from local RAG without hitting Brave again.
       //
-      // Admin-gated. Reason: /api/ingest is admin-only for good reason —
-      // it writes to shared knowledge_base that feeds every future
-      // chat's RAG. Letting any authenticated user persist arbitrary
-      // web snippets (even "only cited" ones) is a poisoning vector:
-      // an attacker SEO-games a page so Brave returns it for a crafted
-      // question, LLM cites it, it's in KB forever. Keeping this
-      // admin-only preserves the existing trust boundary. Regular users
-      // still benefit from live web search (the 4th RAG leg), just
-      // without durable writes.
-      if (isAdmin && autolearn && webHits.length) {
+      // Write access is deliberately narrower than chat access. Reason:
+      // /api/ingest is admin-only because it writes to shared knowledge_base
+      // that feeds every future chat's RAG — letting any authenticated
+      // user persist arbitrary web snippets (even "only cited" ones)
+      // is a poisoning vector. So auto-ingest fires only for:
+      //   (a) X-Admin-Token admins (shell/curl flow), OR
+      //   (b) allowlisted user accounts (set via autolearn_allowed_users
+      //       in settings — admin decides who is trusted enough to grow
+      //       the KB).
+      // Non-allowlisted users still benefit from the live web search leg
+      // this turn; only durable writes are gated.
+      const canAutolearn = isAdmin
+        || (user?.username && allowedAutolearnUsers.has(user.username));
+      if (canAutolearn && autolearn && webHits.length) {
         await autoIngestWebHits(env, webHits, full);
       }
     } catch { /* не критично */ }
