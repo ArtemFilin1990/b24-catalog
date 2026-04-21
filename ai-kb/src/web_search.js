@@ -90,6 +90,28 @@ export async function webSearch(env, query, topK = 3) {
 }
 
 /**
+ * Neutralise anything inside a Brave hit that could prematurely close the
+ * UNTRUSTED_WEB_BEGIN/END sandbox handleChat wraps around the web block.
+ *
+ * The defense is purely structural: if an attacker's snippet contains the
+ * literal END marker, the LLM would treat everything after it as trusted
+ * context — "closing the door" from inside the untrusted section. We break
+ * any substring that matches the marker shape before it's ever emitted.
+ *
+ * Exported so autoIngestWebHits can apply the same sanitisation before
+ * persisting web snippets into knowledge_base — otherwise the marker
+ * could be smuggled at ingest time and surface at retrieval.
+ */
+export function sanitizeForUntrustedBlock(s) {
+  return String(s ?? '')
+    // Break the exact markers.
+    .replace(/UNTRUSTED_WEB_(BEGIN|END)/gi, 'UNTRUSTED_WEB_$1_REDACTED')
+    // Defence in depth: also break any `===` run of 3+ so an attacker
+    // can't invent a new marker shape we might adopt later.
+    .replace(/={3,}/g, '==[=]==');
+}
+
+/**
  * Render search hits into a compact context block the LLM can consume.
  * Empty array → empty string so callers don't have to null-check.
  */
@@ -97,7 +119,10 @@ export function formatWebContext(hits) {
   if (!hits?.length) return '';
   const lines = hits.map((h, i) => {
     const n = i + 1;
-    return `[${n}] ${h.title}\n    ${h.url}\n    ${h.snippet}`;
+    const title   = sanitizeForUntrustedBlock(h.title);
+    const url     = sanitizeForUntrustedBlock(h.url);
+    const snippet = sanitizeForUntrustedBlock(h.snippet);
+    return `[${n}] ${title}\n    ${url}\n    ${snippet}`;
   });
   return lines.join('\n');
 }
