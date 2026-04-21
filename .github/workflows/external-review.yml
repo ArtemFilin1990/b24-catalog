@@ -1,0 +1,89 @@
+name: External Contributor Review
+
+# Runs Claude Code on every PR opened by a first-time contributor.
+# Leaves inline review comments + a welcoming top-level comment. Does not
+# approve or merge — humans still decide.
+#
+# Why `pull_request_target` instead of `pull_request`:
+# first-time contributions almost always come from forks, and
+# `pull_request` from a fork does NOT expose repo secrets, so
+# `${{ secrets.ANTHROPIC_API_KEY }}` would be empty and the action would
+# silently no-op. `pull_request_target` runs in the context of the base
+# repo with secrets available.
+#
+# Security caveat: `pull_request_target` gets a write-scoped token and
+# runs in the base repo's trust boundary. DO NOT check out the PR's HEAD
+# (that would execute untrusted code with our secrets). The checkout
+# below takes the default ref (the base branch). The Claude action
+# reviews the diff through the GitHub API via `gh pr view` / inline
+# comment MCP, not by executing code from the fork.
+#
+# Required secret: ANTHROPIC_API_KEY (account or project-scoped key).
+# Without the secret the Claude step exits non-destructively.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+# One job per PR. A rapid series of `synchronize` events (force-push,
+# fixup commits) cancels the in-flight review so only the latest push
+# gets feedback — avoids duplicated comments and extra API spend.
+concurrency:
+  group: external-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  external-review:
+    # `FIRST_TIME_CONTRIBUTOR` — first PR to THIS repo.
+    # `FIRST_TIMER`           — first-ever PR on GitHub (also first to
+    #                           this repo by definition). GitHub surfaces
+    #                           both values, gate on either.
+    if: >-
+      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+      || github.event.pull_request.author_association == 'FIRST_TIMER'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Explicit: check out the BASE ref, never the fork's HEAD. Even
+          # though `pull_request_target` defaults to base, pinning makes
+          # the intent obvious to anyone reading/auditing this file.
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            CONTRIBUTOR: ${{ github.event.pull_request.user.login }}
+
+            This is a first-time contribution from @${{ github.event.pull_request.user.login }}.
+
+            Please provide a comprehensive review focusing on:
+            - Compliance with project coding standards
+            - Proper test coverage (unit and integration)
+            - Documentation for new features
+            - Potential breaking changes
+            - License header requirements
+
+            Be welcoming but thorough in your review. Use inline comments for code-specific feedback.
+
+          # Intentionally narrow tool surface. Under pull_request_target the
+          # job has repo secrets + a write-capable GITHUB_TOKEN, so any
+          # shell command that publishes text to the PR is a potential
+          # secret-exfiltration channel via prompt injection (a malicious
+          # PR body could instruct Claude to shell out and post
+          # `$ANTHROPIC_API_KEY` as a comment). Therefore:
+          # - `mcp__github_inline_comment__create_inline_comment` — allowed;
+          #   constrained to (path, line, body) review comments on the diff.
+          # - `Bash(gh pr view:*)` — allowed; read-only, surfaces no env vars.
+          # - `Bash(gh pr comment:*)` — REMOVED. This was the shell-level
+          #   arbitrary-text write path and directly enabled the exfil
+          #   scenario.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*)"
