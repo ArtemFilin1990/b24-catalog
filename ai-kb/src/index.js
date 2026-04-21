@@ -290,6 +290,7 @@ const SETTING_KEYS = new Set([
   'max_tokens',
   'catalog_topk',
   'vector_topk',
+  'web_search_topk',
 ]);
 
 // Schema lives in ai-kb/migrations/0005_settings.sql — no lazy DDL here.
@@ -324,6 +325,7 @@ async function handleGetSettings(env) {
     max_tokens: String(MAX_TOKENS),
     catalog_topk: String(CATALOG_TOPK),
     vector_topk: String(VECTOR_TOPK),
+    web_search_topk: String(WEB_SEARCH_TOPK),
     _overrides: {},
   };
   for (const r of results || []) {
@@ -680,7 +682,7 @@ async function handleChat(request, env, ctx) {
 
   // Перехватываем поток для записи в историю
   const [streamA, streamB] = stream.tee();
-  const sources = catalogRows.length + kbMatches.length + geoRows.length;
+  const sources = catalogRows.length + kbMatches.length + geoRows.length + webHits.length;
 
   // Асинхронно собираем ответ и пишем в D1.
   // ctx.waitUntil держит изолят живым до завершения записи — без него
@@ -708,7 +710,11 @@ async function handleChat(request, env, ctx) {
       // sourcesCat/sourcesKb columns only, and geo IS catalog data
       // (just selected by exact dimension match). The precise per-leg
       // breakdown still ships in the X-Sources-* response headers.
-      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length + geoRows.length, kbMatches.length, CHAT_MODEL, Date.now() - t0, null);
+      // Roll web hits into the kb bucket for query_log — the schema only
+      // has sources_cat + sources_kb columns and web is conceptually an
+      // external knowledge source (like the vectorized KB). Per-leg
+      // counts still live in the X-Sources-* response headers.
+      await logQuery(env, sessionId, searchQuery, full.length, catalogRows.length + geoRows.length, kbMatches.length + webHits.length, CHAT_MODEL, Date.now() - t0, null);
     } catch { /* не критично */ }
   })();
   if (ctx?.waitUntil) ctx.waitUntil(persist);
@@ -719,6 +725,7 @@ async function handleChat(request, env, ctx) {
       'X-Sources-Catalog': String(catalogRows.length),
       'X-Sources-Kb':      String(kbMatches.length),
       'X-Sources-Geo':     String(geoRows.length),
+      'X-Sources-Web':     String(webHits.length),
       'X-Images-Described': String(imageDescs.length),
     },
   });

@@ -59,12 +59,19 @@ export async function webSearch(env, query, topK = 3) {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'Accept-Encoding': 'gzip',
+        // Do NOT set Accept-Encoding here — it's a forbidden header in the
+        // Fetch/Workers runtime and setting it throws TypeError, which
+        // would make this integration silently fail-open. The runtime
+        // negotiates compression with Brave automatically.
         'X-Subscription-Token': key,
       },
-      // 5s cap — if Brave is slow we'd rather return no web results than
-      // block the user's chat stream.
-      signal: AbortSignal.timeout(5000),
+      // Tight 2.5s budget. The web leg sits inside the same Promise.all
+      // as catalog FTS, Vectorize, and geo lookup — if Brave stalls, all
+      // three local legs wait with it and the user sees the first LLM
+      // token that many seconds late. At 2.5s we still catch Brave's
+      // normal p99 (~1.5s); on a slow day we skip web and let local
+      // retrieval answer.
+      signal: AbortSignal.timeout(2500),
     });
     if (!resp.ok) return [];
     const json = await resp.json();
