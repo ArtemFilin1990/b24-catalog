@@ -952,6 +952,7 @@
   const pMaxTok = $('#p-maxtok');
   const pCatK = $('#p-catk');
   const pVecK = $('#p-veck');
+  const pWebK = $('#p-webk');
   const paramsSaveBtn = $('#params-save');
   const paramsStatus = $('#params-status');
 
@@ -981,6 +982,7 @@
       if (pMaxTok) pMaxTok.value = s.max_tokens || '';
       if (pCatK) pCatK.value = s.catalog_topk || '';
       if (pVecK) pVecK.value = s.vector_topk || '';
+      if (pWebK) pWebK.value = s.web_search_topk ?? '';
       settingsLoaded = true;
     } catch { /* ignore */ }
   }
@@ -1027,6 +1029,7 @@
       max_tokens: pMaxTok?.value?.trim() || '',
       catalog_topk: pCatK?.value?.trim() || '',
       vector_topk: pVecK?.value?.trim() || '',
+      web_search_topk: pWebK?.value?.trim() ?? '',
     };
     saveSettings(patch, paramsStatus);
   });

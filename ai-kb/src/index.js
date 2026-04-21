@@ -10,6 +10,7 @@ import {
 } from './files.js';
 import { checkRate, bucketForRequest, rateLimitedResponse } from './ratelimit.js';
 import { extractDimensions, extractBearingTypeHint, findAnalogsByDimensions, geoRowToText } from './bearings.js';
+import { webSearch, formatWebContext } from './web_search.js';
 import {
   validateCredentials, hashPassword, safeEqHex, genSalt, newUserId,
   createSessionToken, revokeToken, resolveUser, extractBearer,
@@ -45,6 +46,10 @@ const MAX_ATTACHMENT_TEXT  = 12000;
 const MAX_IMAGES           = 3;
 const VECTOR_TOPK          = 5;
 const CATALOG_TOPK         = 6;
+// Default number of web hits to pipe into the LLM context. 0 disables
+// the web leg entirely even if BRAVE_API_KEY is set. Admin can override
+// per-instance via settings.web_search_topk.
+const WEB_SEARCH_TOPK      = 3;
 const CHUNK_CHARS          = 1200;
 const CHUNK_OVERLAP        = 150;
 const MAX_DOC_CHARS        = 300_000;
@@ -99,6 +104,12 @@ ISO-обозначения (ISO 15 / ISO 355):
 - 7xxx (4-зн.) → 30xxx
 
 Правила: размеры d×D×B — по ISO 15, статус ПОДТВЕРЖДЕНО. Массу — только при точном совпадении бренда и исполнения.
+
+Если в контексте есть блок «🌐 Веб-источники» — это свежая выдача Brave Search, не база Эвереста. Используй её аккуратно:
+- Она может дополнить ответ по редким брендам, новостям, сайтам производителей, но НЕ заменяет кросс-таблицу ГОСТ↔ISO и правила выше.
+- Если веб-источник противоречит кросс-таблице или типу — верь кросс-таблице, веб-источник помечай статусом ТРЕБУЕТ_ПРОВЕРКИ.
+- При упоминании факта из веба давай ссылку [n] на соответствующий пункт. В комментарии — явная строка «Веб-источники: [1], [2]…».
+- Если блока нет — не выдумывай ссылки.
 
 Формат ответа:
 ✅ Итог
@@ -600,6 +611,8 @@ async function handleChat(request, env, ctx) {
   const catalogTopK = Math.max(0, Math.min(20, Number.isFinite(catalogNum) ? catalogNum : CATALOG_TOPK));
   const vectorNum   = parseInt(sMap.vector_topk ?? VECTOR_TOPK, 10);
   const vectorTopK  = Math.max(0, Math.min(20, Number.isFinite(vectorNum) ? vectorNum : VECTOR_TOPK));
+  const webNum      = parseInt(sMap.web_search_topk ?? WEB_SEARCH_TOPK, 10);
+  const webTopK     = Math.max(0, Math.min(10, Number.isFinite(webNum) ? webNum : WEB_SEARCH_TOPK));
 
   // If the user wrote dimensions like "25x52x15" AND a type hint
   // (e.g. NU205 / 6205 / 32205), do a strict geometric lookup in
@@ -610,12 +623,16 @@ async function handleChat(request, env, ctx) {
   const dims = extractDimensions(searchQuery);
   const typeHint = extractBearingTypeHint(searchQuery);
 
-  const [catalogRows, kbMatches, geoRows] = await Promise.all([
+  // Web search runs in parallel with the D1+Vectorize+geo legs so the
+  // network round-trip overlaps with local retrieval. webSearch() is a
+  // no-op if BRAVE_API_KEY isn't set or webTopK is 0 — fails open.
+  const [catalogRows, kbMatches, geoRows, webHits] = await Promise.all([
     catalogTopK > 0 ? searchCatalog(env, searchQuery, catalogTopK).catch(() => []) : Promise.resolve([]),
     vectorTopK > 0 ? searchKnowledge(env, searchQuery, vectorTopK).catch(() => []) : Promise.resolve([]),
     (dims && typeHint)
       ? findAnalogsByDimensions(env.DB, dims.d_inner, dims.d_outer, dims.width, typeHint).catch(() => [])
       : Promise.resolve([]),
+    webTopK > 0 ? webSearch(env, searchQuery, webTopK) : Promise.resolve([]),
   ]);
 
   const imageDescs = [];
@@ -625,12 +642,14 @@ async function handleChat(request, env, ctx) {
   }
 
   const contextText = buildContext(catalogRows, kbMatches);
+  const webText     = formatWebContext(webHits);
   const parts = [];
   if (contextText)       parts.push('Контекст:\n' + contextText);
   if (geoRows.length) {
     const lines = geoRows.map(r => '- ' + geoRowToText(r));
     parts.push(`Точные геометрические аналоги (d=${dims.d_inner} D=${dims.d_outer} B=${dims.width}):\n${lines.join('\n')}`);
   }
+  if (webText)           parts.push('🌐 Веб-источники (Brave Search):\n' + webText);
   if (attachmentText)    parts.push('Прикреплённые документы:\n' + attachmentText);
   if (imageDescs.length) parts.push('Описание изображений:\n' + imageDescs.join('\n'));
   parts.push('Вопрос: ' + searchQuery);
