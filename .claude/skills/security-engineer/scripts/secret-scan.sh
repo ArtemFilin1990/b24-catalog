@@ -25,14 +25,6 @@ set -eu
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-# Files we care about (exclude node_modules, build artefacts, the skill's own
-# rules-of-thumb files, and binary-ish locations).
-FILES=$(find . \
-  \( -name node_modules -o -name .git -o -name dist -o -name build \) -prune -o \
-  -type f \( -name '*.js' -o -name '*.ts' -o -name '*.html' -o -name '*.css' \
-           -o -name '*.json' -o -name '*.toml' -o -name '*.yml' -o -name '*.yaml' \
-           -o -name '*.md' -o -name '*.sh' \) -print)
-
 fail=0
 
 scan_pattern() {
@@ -46,8 +38,17 @@ scan_pattern() {
   # `TOKEN="${ADMIN_TOKEN:-}"` — those are variable substitutions, not
   # hardcoded literals.
   exclude="${4:-}"
+  # Use null-delimited file list so paths containing whitespace are not
+  # word-split by xargs. The repo convention forbids spaces in paths but
+  # a fail-fast scanner should not silently drop a file just because
+  # someone added one.
   # shellcheck disable=SC2086
-  hits=$(echo "$FILES" | xargs grep -nE $extra -- "$pattern" 2>/dev/null \
+  hits=$(find . \
+      \( -name node_modules -o -name .git -o -name dist -o -name build \) -prune -o \
+      -type f \( -name '*.js' -o -name '*.ts' -o -name '*.html' -o -name '*.css' \
+               -o -name '*.json' -o -name '*.toml' -o -name '*.yml' -o -name '*.yaml' \
+               -o -name '*.md' -o -name '*.sh' \) -print0 2>/dev/null \
+    | xargs -0 grep -nE $extra -- "$pattern" 2>/dev/null \
     | grep -v -E '\.claude/skills/security-engineer/' \
     | grep -v -E '/(known-incidents|threat-model)\.md:' || true)
   if [ -n "$exclude" ]; then

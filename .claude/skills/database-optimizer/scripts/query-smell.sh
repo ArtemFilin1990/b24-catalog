@@ -3,6 +3,15 @@
 # anti-patterns (existing AUTOINCREMENT, SELECT * in admin paths) are
 # warnings so the script stays useful on every PR.
 # Run from repo root, offline.
+#
+# KNOWN LIMITATIONS (intentional — bash-grep is line-oriented):
+#   - The CREATE TABLE idempotency check requires the table identifier
+#     on the same line as `CREATE TABLE`. SQL split across lines like
+#     `CREATE TABLE\n  foo (...)` slips past. The repo convention puts
+#     the identifier on the same line; rely on the d1-migration-safety
+#     skill checklist (and PR review) for split-DDL coverage.
+#   - The interpolation check is purely syntactic. It cannot tell a
+#     hardcoded const from user input; reviewer must verify each hit.
 
 set -eu
 

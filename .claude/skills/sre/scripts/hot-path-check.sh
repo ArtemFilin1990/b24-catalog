@@ -2,6 +2,18 @@
 # Static check for SRE invariants on the chat hot path. Exits non-zero on
 # real regressions only; surfaces existing findings as warnings so the
 # script stays useful on every PR. Run from repo root, offline.
+#
+# KNOWN LIMITATIONS (intentional — bash-grep is a heuristic, not an AST):
+#   - The fetch timeout check looks for `AbortSignal.timeout` anywhere
+#     inside the captured call window. If you put that token in a
+#     comment (`/* AbortSignal.timeout(2500) */`) or string literal
+#     inside the same fetch call, the check is fooled. Anyone writing
+#     code like that is deliberately bypassing the gate; rely on PR
+#     review (or a real linter like eslint with a custom rule) to
+#     catch it.
+#   - Detection key is `fetch(`. Calls renamed via `const f = fetch;
+#     f(url)` aren't tracked. Same caveat: deliberate obfuscation is
+#     out of scope for a 50-line shell script.
 
 set -eu
 
