@@ -32,13 +32,16 @@ for f in $WORKER_JS; do
     { lines[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
-        if (lines[i] !~ /await fetch\(/) continue
-        # Track paren depth from the position of "await fetch(" so we
+        # Tolerate optional whitespace between `fetch` and `(` — JS
+        # accepts `await fetch (url)` and that variant must not slip
+        # past the SRE timeout gate.
+        if (lines[i] !~ /await[[:space:]]+fetch[[:space:]]*\(/) continue
+        # Track paren depth from the position of `await fetch(` so we
         # know when the call expression closes — bullet-proof against
         # both single-line `await fetch(url);` (closes on same line)
         # and multi-line `await fetch(url, {...});`.
         tail = lines[i]
-        sub(/.*await fetch\(/, "", tail)
+        sub(/.*await[[:space:]]+fetch[[:space:]]*\(/, "", tail)
         depth = 1
         for (k = 1; k <= length(tail) && depth > 0; k++) {
           c = substr(tail, k, 1)

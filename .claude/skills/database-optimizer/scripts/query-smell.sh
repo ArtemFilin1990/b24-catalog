@@ -56,7 +56,9 @@ if [ -n "$autoinc" ]; then
 fi
 
 # 4. CREATE TABLE without IF NOT EXISTS — REAL FAIL.
-nonidem=$(grep -nE 'CREATE TABLE [a-zA-Z_]' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null | grep -v 'IF NOT EXISTS' || true)
+#    Case-insensitive: SQLite/D1 accept lowercase keywords too, and a
+#    `create table foo (...)` would otherwise slip past the gate.
+nonidem=$(grep -niE 'create[[:space:]]+table[[:space:]]+[a-z_]' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null | grep -ivE 'if[[:space:]]+not[[:space:]]+exists' || true)
 if [ -n "$nonidem" ]; then
   echo "[FAIL] CREATE TABLE without IF NOT EXISTS — re-running migration will fail:"
   echo "$nonidem"

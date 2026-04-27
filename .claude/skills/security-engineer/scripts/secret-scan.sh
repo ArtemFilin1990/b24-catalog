@@ -27,10 +27,21 @@ fail=0
 scan_pattern() {
   pattern="$1"
   label="$2"
+  # Optional third arg: extra flags for grep (e.g. "-i" for case-insensitive
+  # patterns where keys can be ALL_CAPS like API_KEY / TOKEN).
+  extra="${3:-}"
+  # Optional fourth arg: post-filter regex; matching lines are dropped.
+  # Used by the key=value rule to skip shell template refs like
+  # `TOKEN="${ADMIN_TOKEN:-}"` — those are variable substitutions, not
+  # hardcoded literals.
+  exclude="${4:-}"
   # shellcheck disable=SC2086
-  hits=$(echo "$FILES" | xargs grep -nE -- "$pattern" 2>/dev/null \
+  hits=$(echo "$FILES" | xargs grep -nE $extra -- "$pattern" 2>/dev/null \
     | grep -v -E '\.claude/skills/security-engineer/' \
     | grep -v -E '/(known-incidents|threat-model)\.md:' || true)
+  if [ -n "$exclude" ]; then
+    hits=$(printf '%s\n' "$hits" | grep -v -E -- "$exclude" || true)
+  fi
   if [ -n "$hits" ]; then
     echo "[$label]"
     echo "$hits"
@@ -51,8 +62,10 @@ scan_pattern 'Bearer [A-Za-z0-9._-]{32,}'   "Bearer literal in source"
 # expression so single-quoted secrets like token='...' actually match.
 # Don't exclude $ from the value class — real secrets routinely contain
 # $ (`password='Abcd$1234567890'`); excluding it created a bypass.
+# Pass `-i` so ALL_CAPS variants like `API_KEY = "..."` / `TOKEN='...'`
+# also match — credentials are routinely committed with uppercase keys.
 scan_pattern "(password|passwd|secret|api_key|apikey|token)[[:space:]]*[:=][[:space:]]*[\"'][^\"']{12,}[\"']" \
-                                            "key=value-style secret literal"
+                                            "key=value-style secret literal" "-i" '\$\{'
 
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: secret-shape matches above. Either rotate + remove, or add a justification comment if it's a fixture/example."
