@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Local skills
 
-This repo ships six playbooks in `.claude/skills/` that encode hard-won repo-specific rules. An agent must load the matching skill **before** generic reasoning when the task trigger below applies. The layout, composition rules, and decision tree live in [`.claude/skills/README.md`](.claude/skills/README.md) — read that when adding, removing, or renaming a skill.
+This repo ships nine playbooks in `.claude/skills/` that encode hard-won repo-specific rules. An agent must load the matching skill **before** generic reasoning when the task trigger below applies. The layout, composition rules, and decision tree live in [`.claude/skills/README.md`](.claude/skills/README.md) — read that when adding, removing, or renaming a skill.
 
-- [`.claude/skills/kb-audit`](.claude/skills/kb-audit) — top-level PR review: scope discipline, merge-decision matrix, composes the four specialist review skills below.
+- [`.claude/skills/kb-audit`](.claude/skills/kb-audit) — top-level PR review: scope discipline, merge-decision matrix, composes the specialist review skills below.
 - [`.claude/skills/cloudflare-worker-review`](.claude/skills/cloudflare-worker-review) — Worker routes, bindings, secrets, admin/upload auth, audit coverage, and the `deploy-ai-kb.yml` hardening invariants.
 - [`.claude/skills/d1-migration-safety`](.claude/skills/d1-migration-safety) — bootstrap/upgrade safety, FK pragma, `schema_migrations` semantics, view-uid and dedupe rules.
 - [`.claude/skills/catalog-import-review`](.claude/skills/catalog-import-review) — R2 → `files` → `file_extracts` → staging → `catalog_rows` → `catalog_master_view` pipeline, duplicate prevention, bot read path.
 - [`.claude/skills/bearing-analog-check`](.claude/skills/bearing-analog-check) — type/series/geometry rules for bearing analogs, status vocabulary, ГОСТ ↔ ISO traps, commercial-data boundary.
+- [`.claude/skills/security-engineer`](.claude/skills/security-engineer) — adversarial review (STRIDE, prompt-injection, secret hygiene) sized for this Workers + D1 + Vectorize stack; references known leaked-token + KB-poisoning incidents.
+- [`.claude/skills/sre`](.claude/skills/sre) — SLOs, error budgets, hot-path latency budget, deploy retry/cron safety; companion to the runbook in `docs/RUNBOOK.md`.
+- [`.claude/skills/database-optimizer`](.claude/skills/database-optimizer) — D1 + Vectorize query patterns, index coverage, FTS5 vs LIKE fallback, vector dim/metadata discipline.
 - [`.claude/skills/ai-kb-chatbot-build`](.claude/skills/ai-kb-chatbot-build) — the single generative skill: extend or fix the live `ai-kb` chatbot with D1 memory, Vectorize RAG, R2 ingest, admin settings, and safe bearing answers.
 
 Each skill directory has the same shape: `SKILL.md` (frontmatter + workflow + output contract), `references/*.md` (authoritative rule sheets), `scripts/*.sh` (static checks or a smoke test). Run the relevant script — they are offline except for `ai-kb-chatbot-build/scripts/smoke_chat.sh`.

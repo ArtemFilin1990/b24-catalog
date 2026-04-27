@@ -28,7 +28,7 @@ Agents discover skills by their frontmatter and the `description` text in `CLAUD
 
 ## Catalog
 
-Six skills, two categories:
+Nine skills, two categories:
 
 ### Build / extend (generative)
 | Skill | Fires when the user asks to… |
@@ -43,6 +43,9 @@ Six skills, two categories:
 | `d1-migration-safety` | `migrations/*.sql`, `ai-kb/migrations/*.sql`, any new CREATE TABLE/VIEW/INDEX. |
 | `catalog-import-review` | `/api/imports*`, `staging_catalog_import`, `catalog_rows`, `catalog_master_view`, import/normalize/view layer. |
 | `bearing-analog-check` | `AI_SYSTEM` prompt, `searchCatalog`, `catalogRowToText`, analog tables, any PR that changes how the bot picks ГОСТ↔ISO equivalents. |
+| `security-engineer` | new `/api/*` route, auth helpers, secrets, third-party fetch with API key, anything LLM-context-related (prompt-injection, KB poisoning surface). |
+| `sre` | deploy workflow, error handling around `env.AI/VECTORIZE/DB`, `ctx.waitUntil` callsites, observability headers, rate-limit thresholds, backup cron. |
+| `database-optimizer` | new SQL, new index/FK, GLOB/LIKE/FTS5 query, `env.VECTORIZE.*` callsite, `searchCatalog`/`searchKnowledge` change. |
 
 ## Composition rules
 
@@ -50,10 +53,13 @@ Skills compose. A PR that adds a new admin route which touches a new migration a
 
 1. `kb-audit` — top-level scope and merge-decision framework.
 2. `cloudflare-worker-review` — for the admin route.
-3. `d1-migration-safety` — for the migration.
-4. `catalog-import-review` — if the migration is about staging/normalized/view layer.
-5. `bearing-analog-check` — for the prompt/analog change.
-6. `ai-kb-chatbot-build` — only if the change is inside `ai-kb/`.
+3. `security-engineer` — adversarial pass on the new route + any new secret/auth surface.
+4. `d1-migration-safety` — for the migration shape (idempotency, FK pragma, schema_migrations).
+5. `database-optimizer` — for query plans, indexes, vector dim/metadata of the new shape.
+6. `catalog-import-review` — if the migration is about staging/normalized/view layer.
+7. `bearing-analog-check` — for the prompt/analog change.
+8. `sre` — for any change that adds an `await` in the chat hot path, raises a timeout, or modifies the deploy workflow.
+9. `ai-kb-chatbot-build` — only if the change is inside `ai-kb/`.
 
 Do not copy-paste content across skills. Cross-reference with relative paths:
 
