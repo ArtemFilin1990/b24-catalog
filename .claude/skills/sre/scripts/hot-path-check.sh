@@ -16,6 +16,12 @@
 #     can keep depth open and absorb a later fetch into its window.
 #     Same reasoning: string-aware parsing in awk would need ~30 more
 #     lines for an adversarial case PR review handles.
+#   - Only the FIRST fetch occurrence per line is evaluated. Compact
+#     forms like `Promise.all([fetch(a), fetch(b, {...timeout})])`
+#     can mask a missing-timeout first call because the timeout token
+#     appears later on the same line. Iterating every match per line
+#     would need a substring-loop in awk; for now, write Promise.all
+#     fetches one per line and PR review covers the compact form.
 #   - Detection key is `fetch(`. Calls renamed via `const f = fetch;
 #     f(url)` aren't tracked. Same caveat: deliberate obfuscation is
 #     out of scope for a 50-line shell script.

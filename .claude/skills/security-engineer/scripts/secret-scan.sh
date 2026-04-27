@@ -49,8 +49,8 @@ scan_pattern() {
                -o -name '*.json' -o -name '*.toml' -o -name '*.yml' -o -name '*.yaml' \
                -o -name '*.md' -o -name '*.sh' \) -print0 2>/dev/null \
     | xargs -0 grep -nE $extra -- "$pattern" 2>/dev/null \
-    | grep -v -E '\.claude/skills/security-engineer/' \
-    | grep -v -E '/(known-incidents|threat-model)\.md:' || true)
+    | grep -v -E '/(known-incidents|threat-model)\.md:' \
+    | grep -v -E '/secret-scan\.sh:' || true)
   if [ -n "$exclude" ]; then
     hits=$(printf '%s\n' "$hits" | grep -v -E -- "$exclude" || true)
   fi
