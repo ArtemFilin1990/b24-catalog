@@ -49,7 +49,9 @@ scan_pattern 'Bearer [A-Za-z0-9._-]{32,}'   "Bearer literal in source"
 # x, 2, 7 — NOT as ASCII 0x27 (single quote). Use double-quoted shell
 # string and put the literal ' character directly into the bracket
 # expression so single-quoted secrets like token='...' actually match.
-scan_pattern "(password|passwd|secret|api_key|apikey|token)[[:space:]]*[:=][[:space:]]*[\"'][^\"'\$]{12,}[\"']" \
+# Don't exclude $ from the value class — real secrets routinely contain
+# $ (`password='Abcd$1234567890'`); excluding it created a bypass.
+scan_pattern "(password|passwd|secret|api_key|apikey|token)[[:space:]]*[:=][[:space:]]*[\"'][^\"']{12,}[\"']" \
                                             "key=value-style secret literal"
 
 if [ "$fail" -ne 0 ]; then

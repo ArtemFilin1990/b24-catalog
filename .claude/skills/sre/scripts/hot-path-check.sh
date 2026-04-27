@@ -32,15 +32,33 @@ for f in $WORKER_JS; do
     { lines[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ /await fetch\(/) {
-          window = lines[i]
-          end = (i + 30 < NR) ? i + 30 : NR
-          for (j = i + 1; j <= end; j++) {
-            window = window ORS lines[j]
-            if (lines[j] ~ /^[[:space:]]*\}\);/ || lines[j] ~ /^[[:space:]]*\);$/) break
-          }
-          if (window !~ /AbortSignal\.timeout/) print FILENAME ":" i ": fetch without AbortSignal.timeout"
+        if (lines[i] !~ /await fetch\(/) continue
+        # Track paren depth from the position of "await fetch(" so we
+        # know when the call expression closes — bullet-proof against
+        # both single-line `await fetch(url);` (closes on same line)
+        # and multi-line `await fetch(url, {...});`.
+        tail = lines[i]
+        sub(/.*await fetch\(/, "", tail)
+        depth = 1
+        for (k = 1; k <= length(tail) && depth > 0; k++) {
+          c = substr(tail, k, 1)
+          if (c == "(") depth++
+          else if (c == ")") depth--
         }
+        window = lines[i]
+        if (depth > 0) {
+          end = (i + 30 < NR) ? i + 30 : NR
+          for (j = i + 1; j <= end && depth > 0; j++) {
+            window = window ORS lines[j]
+            line_str = lines[j]
+            for (k = 1; k <= length(line_str) && depth > 0; k++) {
+              c = substr(line_str, k, 1)
+              if (c == "(") depth++
+              else if (c == ")") depth--
+            }
+          }
+        }
+        if (window !~ /AbortSignal\.timeout/) print FILENAME ":" i ": fetch without AbortSignal.timeout"
       }
     }
   ' "$f" > /tmp/fetch-$$.out 2>/dev/null || true
