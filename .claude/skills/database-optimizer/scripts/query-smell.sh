@@ -31,9 +31,9 @@ fi
 #    heuristic: flag any `${var}` where var is NOT in a small allowlist
 #    of known-safe identifiers used in admin paths.
 interp_hits=$(awk '
-  /\.prepare\(`/ {in_prep=1}
+  /\.prepare\(`/ {in_prep=1; start=FNR}
   in_prep {buf = buf $0 ORS}
-  in_prep && /`\)/ {if (buf ~ /\$\{/) print FILENAME ":" NR ": " buf; in_prep=0; buf=""}
+  in_prep && /`\)/ {if (buf ~ /\$\{/) print FILENAME ":" start ": " buf; in_prep=0; buf=""}
 ' $SRC_FILES 2>/dev/null || true)
 if [ -n "$interp_hits" ]; then
   echo "[WARN] \${...} interpolation inside .prepare(\`...\`) — verify the var is from a hardcoded list, never user input:"
@@ -73,8 +73,9 @@ fi
 
 # 6. VECTORIZE.upsert without explicit dim filter (EMBED_DIMS) anywhere
 #    in the file.  Coarse: if upsert exists in a file that doesn't
-#    mention EMBED_DIMS, that's a warning.
-for f in ai-kb/src/*.js; do
+#    mention EMBED_DIMS, that's a warning. Iterate all SRC_FILES so the
+#    root catalog worker is also covered if it ever touches Vectorize.
+for f in $SRC_FILES; do
   [ -f "$f" ] || continue
   if grep -q 'VECTORIZE\.upsert(' "$f" 2>/dev/null && ! grep -q 'EMBED_DIMS' "$f" 2>/dev/null; then
     echo "[WARN] $f: VECTORIZE.upsert without EMBED_DIMS dimension check — partial vectors poison query results."

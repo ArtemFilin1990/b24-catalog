@@ -19,8 +19,11 @@ fi
 
 # 1. fetch() without AbortSignal.timeout in the same call.
 #    Detection: for each `await fetch(` line, scan a 30-line window for
-#    AbortSignal.timeout. If absent → real regression, fail.
-for f in ai-kb/src/web_search.js ai-kb/src/index.js src/index.js; do
+#    AbortSignal.timeout. If absent → real regression, fail. Iterate every
+#    JS in src/ and ai-kb/src/ so a new file picks up the check
+#    automatically.
+WORKER_JS=$(find src ai-kb/src -type f -name '*.js' 2>/dev/null || true)
+for f in $WORKER_JS; do
   [ -f "$f" ] || continue
   awk '
     /await fetch\(/ {
