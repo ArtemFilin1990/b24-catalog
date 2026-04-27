@@ -56,9 +56,11 @@ if [ -n "$autoinc" ]; then
 fi
 
 # 4. CREATE TABLE without IF NOT EXISTS — REAL FAIL.
-#    Case-insensitive: SQLite/D1 accept lowercase keywords too, and a
-#    `create table foo (...)` would otherwise slip past the gate.
-nonidem=$(grep -niE 'create[[:space:]]+table[[:space:]]+[a-z_]' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null | grep -ivE 'if[[:space:]]+not[[:space:]]+exists' || true)
+#    Case-insensitive: SQLite/D1 accept lowercase keywords too. Allow the
+#    identifier after TABLE to start with a letter, underscore OR a
+#    quoted-identifier opener (`"`, backtick, `[`) — `CREATE TABLE "foo"`
+#    is valid SQLite and would otherwise bypass the check.
+nonidem=$(grep -niE 'create[[:space:]]+table[[:space:]]+([a-z_]|"|`|\[)' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null | grep -ivE 'if[[:space:]]+not[[:space:]]+exists' || true)
 if [ -n "$nonidem" ]; then
   echo "[FAIL] CREATE TABLE without IF NOT EXISTS — re-running migration will fail:"
   echo "$nonidem"

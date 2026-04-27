@@ -7,7 +7,18 @@
 #   - sk-*    OpenAI-style keys
 #   - ghp_/gho_/github_pat_*  GitHub tokens
 #   - 'Bearer ' literal followed by a long string
-#   - lines like  password = '...'  / token = "..."
+#   - lines like  password = '...'  / token = "..."  (case-insensitive,
+#     skips ${...} template refs)
+#
+# KNOWN LIMITATION: this is a line-oriented grep. Multi-line literals
+# like:
+#     const TOKEN =
+#       "literal-secret-here";
+# slip past every rule below. A static line scan can't reliably catch
+# them without massive false-positive rate. For paranoid coverage,
+# layer a real secret scanner on top (gitleaks, trufflehog, GitHub's
+# native secret scanning). This script is the cheap first line of
+# defence, not the only one.
 
 set -eu
 

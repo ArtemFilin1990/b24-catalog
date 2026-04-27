@@ -32,16 +32,20 @@ for f in $WORKER_JS; do
     { lines[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
-        # Tolerate optional whitespace between `fetch` and `(` — JS
-        # accepts `await fetch (url)` and that variant must not slip
-        # past the SRE timeout gate.
-        if (lines[i] !~ /await[[:space:]]+fetch[[:space:]]*\(/) continue
-        # Track paren depth from the position of `await fetch(` so we
-        # know when the call expression closes — bullet-proof against
-        # both single-line `await fetch(url);` (closes on same line)
-        # and multi-line `await fetch(url, {...});`.
-        tail = lines[i]
-        sub(/.*await[[:space:]]+fetch[[:space:]]*\(/, "", tail)
+        # Skip Worker handler definitions like `async fetch(request, env, ctx) {`
+        # and explicit `function fetch(...)` — those are method declarations,
+        # not network calls, and pulling them in would false-fail every
+        # Workers entry point.
+        if (lines[i] ~ /(async|function)[[:space:]]+fetch[[:space:]]*\(/) continue
+        # Match a global fetch call: preceded by start-of-line or a
+        # non-identifier char (so obj.fetch and myfetch are excluded).
+        # Catches forms like await fetch(, return fetch(, const p =
+        # fetch(, (fetch(...)) — anywhere fetch is a builtin call.
+        if (!match(lines[i], /(^|[^A-Za-z0-9_$.])fetch[[:space:]]*\(/)) continue
+        # Track paren depth from the char right after the opening (
+        # so we know when the call expression closes. Works for both
+        # single-line fetch(url); and multi-line fetch(url, {...});
+        tail = substr(lines[i], RSTART + RLENGTH)
         depth = 1
         for (k = 1; k <= length(tail) && depth > 0; k++) {
           c = substr(tail, k, 1)
