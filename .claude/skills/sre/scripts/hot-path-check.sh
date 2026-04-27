@@ -11,6 +11,11 @@
 #     code like that is deliberately bypassing the gate; rely on PR
 #     review (or a real linter like eslint with a custom rule) to
 #     catch it.
+#   - Paren depth tracking counts every `(` and `)` including ones
+#     inside string literals. A weird call like `fetch("...a(b", {...})`
+#     can keep depth open and absorb a later fetch into its window.
+#     Same reasoning: string-aware parsing in awk would need ~30 more
+#     lines for an adversarial case PR review handles.
 #   - Detection key is `fetch(`. Calls renamed via `const f = fetch;
 #     f(url)` aren't tracked. Same caveat: deliberate obfuscation is
 #     out of scope for a 50-line shell script.

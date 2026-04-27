@@ -69,7 +69,11 @@ fi
 #    identifier after TABLE to start with a letter, underscore OR a
 #    quoted-identifier opener (`"`, backtick, `[`) — `CREATE TABLE "foo"`
 #    is valid SQLite and would otherwise bypass the check.
-nonidem=$(grep -niE 'create[[:space:]]+table[[:space:]]+([a-z_]|"|`|\[)' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null | grep -ivE 'if[[:space:]]+not[[:space:]]+exists' || true)
+#    Drop SQL comment lines (`-- ...`) before matching so a documentation
+#    line like `-- create table foo` never false-fails the gate.
+nonidem=$(grep -nvE '^[[:space:]]*--' migrations/*.sql ai-kb/migrations/*.sql 2>/dev/null \
+  | grep -iE 'create[[:space:]]+table[[:space:]]+([a-z_]|"|`|\[)' \
+  | grep -ivE 'if[[:space:]]+not[[:space:]]+exists' || true)
 if [ -n "$nonidem" ]; then
   echo "[FAIL] CREATE TABLE without IF NOT EXISTS — re-running migration will fail:"
   echo "$nonidem"
