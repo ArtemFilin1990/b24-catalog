@@ -75,10 +75,13 @@ user request
       ├── yes → ai-kb-chatbot-build   (generative)
       └── no  → is it a PR review or risk check?
                 ├── yes → kb-audit (top)
-                │         ├── worker/auth/deploy change? → cloudflare-worker-review
-                │         ├── SQL migration?             → d1-migration-safety
-                │         ├── import/staging/view SQL?   → catalog-import-review
-                │         └── bearing analog/prompt?     → bearing-analog-check
+                │         ├── worker/auth/deploy change?           → cloudflare-worker-review
+                │         ├── new auth surface / secret / route?   → security-engineer
+                │         ├── SQL migration?                       → d1-migration-safety
+                │         ├── new SQL query / index / vector op?   → database-optimizer
+                │         ├── import/staging/view SQL?             → catalog-import-review
+                │         ├── bearing analog/prompt?               → bearing-analog-check
+                │         └── deploy yaml / hot-path latency / ctx.waitUntil? → sre
                 └── no  → no skill required; use general reasoning
 ```
 

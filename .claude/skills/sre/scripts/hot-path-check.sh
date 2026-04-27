@@ -17,26 +17,31 @@ if [ ! -f "$INDEX" ]; then
   exit 0
 fi
 
-# 1. fetch() without AbortSignal.timeout in the same call.
-#    Detection: for each `await fetch(` line, scan a 30-line window for
-#    AbortSignal.timeout. If absent → real regression, fail. Iterate every
-#    JS in src/ and ai-kb/src/ so a new file picks up the check
-#    automatically.
+# 1. fetch() without AbortSignal.timeout in the same call expression.
+#    Detection: load the whole file into an array, then for EACH `await
+#    fetch(` line scan a 30-line forward window for AbortSignal.timeout
+#    or for the end-of-call (`});` / `);` at column zero). Using getline
+#    here would advance the global record cursor and skip nearby
+#    fetch() calls entirely — see the array-based scan below.
+#    Iterates every JS in src/ and ai-kb/src/ so new worker source
+#    auto-enrolls.
 WORKER_JS=$(find src ai-kb/src -type f -name '*.js' 2>/dev/null || true)
 for f in $WORKER_JS; do
   [ -f "$f" ] || continue
   awk '
-    /await fetch\(/ {
-      start = NR
-      buf = $0
-      # Read up to 30 more lines or until we close the fetch call.
-      for (i = 0; i < 30; i++) {
-        if ((getline next_line) <= 0) break
-        buf = buf ORS next_line
-        # crude close: a line that ends a top-level call expression
-        if (next_line ~ /^[[:space:]]*\}\);/ || next_line ~ /^[[:space:]]*\);$/) break
+    { lines[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (lines[i] ~ /await fetch\(/) {
+          window = lines[i]
+          end = (i + 30 < NR) ? i + 30 : NR
+          for (j = i + 1; j <= end; j++) {
+            window = window ORS lines[j]
+            if (lines[j] ~ /^[[:space:]]*\}\);/ || lines[j] ~ /^[[:space:]]*\);$/) break
+          }
+          if (window !~ /AbortSignal\.timeout/) print FILENAME ":" i ": fetch without AbortSignal.timeout"
+        }
       }
-      if (buf !~ /AbortSignal\.timeout/) print FILENAME ":" start ": fetch without AbortSignal.timeout"
     }
   ' "$f" > /tmp/fetch-$$.out 2>/dev/null || true
   if [ -s /tmp/fetch-$$.out ]; then

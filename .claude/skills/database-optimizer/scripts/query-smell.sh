@@ -26,19 +26,20 @@ if [ -n "$selstar_all" ]; then
   warn=1
 fi
 
-# 2. ${...} interpolation inside .prepare(`...`). FAIL only if the
-#    interpolation looks like user input (not a hardcoded const). Crude
-#    heuristic: flag any `${var}` where var is NOT in a small allowlist
-#    of known-safe identifiers used in admin paths.
+# 2. ${...} interpolation inside .prepare(`...`) — warning only.
+#    Coarse: flags ANY template interpolation inside prepared SQL.
+#    Reviewer must confirm the var is not user-controlled. The script
+#    does NOT apply an allowlist heuristic and does not fail — that
+#    static distinction is unreliable, so treat every hit as worth eyes.
 interp_hits=$(awk '
   /\.prepare\(`/ {in_prep=1; start=FNR}
   in_prep {buf = buf $0 ORS}
   in_prep && /`\)/ {if (buf ~ /\$\{/) print FILENAME ":" start ": " buf; in_prep=0; buf=""}
 ' $SRC_FILES 2>/dev/null || true)
 if [ -n "$interp_hits" ]; then
-  echo "[WARN] \${...} interpolation inside .prepare(\`...\`) — verify the var is from a hardcoded list, never user input:"
+  echo "[WARN] \${...} interpolation inside .prepare(\`...\`) — review manually; prefer ? + .bind() for new code:"
   echo "$interp_hits"
-  echo "  (failing only if you can't justify it; for new code prefer ? + .bind())"
+  echo "  (this check warns on any interpolation; it does not fail or apply an allowlist)"
   echo
   warn=1
 fi

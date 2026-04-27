@@ -69,10 +69,18 @@ the migration ran. Process:
 OR ship a self-heal in the worker (the `ensureAuthTables` pattern) so
 either order works. Self-heal is the wart-of-record per CLAUDE.md.
 
-`schema_migrations` only records root migrations (`migrations/0001_…`) —
-the ai-kb migrations are idempotent-by-shape (`CREATE TABLE IF NOT EXISTS`)
-and don't insert. So `SELECT version FROM schema_migrations` only reflects
-root state. Use `SELECT type, name FROM sqlite_master` to see ai-kb state.
+`schema_migrations` is a partial record. Some ai-kb migrations (0005, 0006,
+0007) DO `INSERT OR IGNORE INTO schema_migrations`, but the older ai-kb
+migrations (0001–0004) don't — they're idempotent-by-shape only
+(`CREATE TABLE IF NOT EXISTS`). Both root migrations (0001, 0002) insert.
+
+So `SELECT version FROM schema_migrations` is a useful but incomplete
+view. For an authoritative ai-kb schema check, query objects directly:
+`SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`.
+
+When you add a new migration, follow the new convention: end the file with
+`INSERT OR IGNORE INTO schema_migrations (version) VALUES ('NNNN_name');`
+so the table converges to a complete record over time.
 
 ## `prepare()` cache and parameter limits
 

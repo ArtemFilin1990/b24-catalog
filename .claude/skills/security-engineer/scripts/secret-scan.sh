@@ -45,7 +45,11 @@ scan_pattern '\bghp_[A-Za-z0-9]{20,}'       "GitHub personal token (ghp_*)"
 scan_pattern '\bgho_[A-Za-z0-9]{20,}'       "GitHub OAuth token (gho_*)"
 scan_pattern '\bgithub_pat_[A-Za-z0-9_]{20,}' "GitHub fine-grained PAT"
 scan_pattern 'Bearer [A-Za-z0-9._-]{32,}'   "Bearer literal in source"
-scan_pattern '(password|passwd|secret|api_key|apikey|token)\s*[:=]\s*["\x27][^"\x27\$]{12,}["\x27]' \
+# grep -E treats \x27 inside a character class as the literal characters
+# x, 2, 7 — NOT as ASCII 0x27 (single quote). Use double-quoted shell
+# string and put the literal ' character directly into the bracket
+# expression so single-quoted secrets like token='...' actually match.
+scan_pattern "(password|passwd|secret|api_key|apikey|token)[[:space:]]*[:=][[:space:]]*[\"'][^\"'\$]{12,}[\"']" \
                                             "key=value-style secret literal"
 
 if [ "$fail" -ne 0 ]; then
