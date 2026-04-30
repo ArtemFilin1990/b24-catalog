@@ -1136,8 +1136,12 @@ function chunkText(text, size = CHUNK_CHARS, overlap = CHUNK_OVERLAP) {
       if (last > size * 0.6) slice = slice.slice(0, last + 1);
     }
     chunks.push(slice.trim());
-    i += slice.length - overlap;
-    if (i <= 0) break;
+    const step = slice.length - overlap;
+    // Bail out if we're not advancing — happens when the trailing remainder
+    // ends up exactly `overlap` chars long, which would otherwise spin the
+    // loop forever and burn the Worker CPU budget.
+    if (step <= 0) break;
+    i += step;
   }
   return chunks.filter(Boolean);
 }
