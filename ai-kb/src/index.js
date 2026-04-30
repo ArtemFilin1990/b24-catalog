@@ -1137,10 +1137,11 @@ function chunkText(text, size = CHUNK_CHARS, overlap = CHUNK_OVERLAP) {
     }
     chunks.push(slice.trim());
     const step = slice.length - overlap;
-    // Bail out if we're not advancing — happens when the trailing remainder
-    // ends up exactly `overlap` chars long, which would otherwise spin the
-    // loop forever and burn the Worker CPU budget.
-    if (step <= 0) break;
+    // Stop once we've already covered the tail of the text — any further
+    // iteration just re-emits a subset of the chunk we just pushed and
+    // diverges from totalChunksCount (used by /api/reindex). Also bail
+    // on a non-positive step so we never spin the Worker CPU.
+    if (end >= clean.length || step <= 0) break;
     i += step;
   }
   return chunks.filter(Boolean);
